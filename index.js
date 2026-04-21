@@ -1,13 +1,25 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require('cors');
 const healthRoutes = require("./routes/healthRoutes");
 const { errorMiddleware } = require("./middlewares/errorMiddleware");
 const logger = require("./utils/logger");
 const authRoutes = require("./routes/authRoutes");
 const importRoutes = require("./routes/importRoutes");
+const botRoutes = require("./routes/botRoutes");
+const interesadoRoutes = require("./routes/interesadoRoutes");
+const analyticsRoutes = require("./routes/analyticsRoutes");
 
 const app = express();
+
+// uso de cors
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}))
+
 app.use(express.json());
 
 // requestId simple
@@ -37,6 +49,9 @@ app.use((req, res, next) => {
 app.use(healthRoutes);
 app.use(authRoutes);
 app.use(importRoutes)
+app.use(botRoutes);
+app.use(interesadoRoutes);
+app.use(analyticsRoutes);
 
 // Middleware de errores
 app.use(errorMiddleware);

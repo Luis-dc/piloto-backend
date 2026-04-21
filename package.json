@@ -12,8 +12,11 @@
   "description": "",
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "botbuilder": "^4.23.3",
+    "cors": "^2.8.6",
     "csv-parse": "^6.1.0",
     "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",

@@ -1,42 +1,44 @@
 const {
-  validateAndGetFechaCorte,
+  resolveAsOfDateFromOptionalFiles,
   createOrGetBatch,
   runImportPipeline,
-  getBatchStatus
+  getBatchStatus,
+  listImportBatches
 } = require("../services/importService");
 
 async function uploadImport(req, res) {
-  const bdo = req.files?.bdo?.[0];
-  const cnv = req.files?.cnv?.[0];
+  const bdo = req.files?.bdo?.[0] || null;
+  const cnv = req.files?.cnv?.[0] || null;
 
-  if (!bdo || !cnv) {
+  if (!bdo && !cnv) {
     return res.status(400).json({
       ok: false,
-      error: "Debes enviar 2 archivos: bdo (BDO.csv) y cnv (2CNV.csv)"
+      error: "Debes enviar al menos 1 archivo: bdo o cnv"
     });
   }
 
   try {
-    // B.2
-    const asOfDate = validateAndGetFechaCorte(bdo.originalname, cnv.originalname);
+    const asOfDate = resolveAsOfDateFromOptionalFiles({
+      bdoOriginalName: bdo?.originalname || null,
+      cnvOriginalName: cnv?.originalname || null
+    });
 
-    // B.3
     const userLabel = req.user?.email || req.user?.uname || req.user?.name || "unknown";
+
     const batch = await createOrGetBatch({
       asOfDate,
-      bdoName: bdo.originalname,
-      cnvName: cnv.originalname,
+      bdoName: bdo?.originalname || null,
+      cnvName: cnv?.originalname || null,
       userLabel
     });
 
-    // B.4 (import completo)
     runImportPipeline({
       batchId: batch.batchId,
       asOfDate,
-      bdoPath: bdo.path,
-      cnvPath: cnv.path,
-      bdoOriginalName: bdo.originalname,
-      cnvOriginalName: cnv.originalname,
+      bdoPath: bdo?.path || null,
+      cnvPath: cnv?.path || null,
+      bdoOriginalName: bdo?.originalname || null,
+      cnvOriginalName: cnv?.originalname || null,
       userLabel
     })
       .then(() => {})
@@ -46,7 +48,11 @@ async function uploadImport(req, res) {
       ok: true,
       message: "Import iniciado",
       batchId: batch.batchId,
-      asOfDate
+      asOfDate,
+      received: {
+        bdo: Boolean(bdo),
+        cnv: Boolean(cnv)
+      }
     });
   } catch (err) {
     return res.status(400).json({ ok: false, error: err.message });
@@ -69,4 +75,21 @@ async function getImportStatus(req, res) {
   return res.json({ ok: true, batch });
 }
 
-module.exports = { uploadImport, getImportStatus };
+async function getImportHistory(req, res) {
+  try {
+    const limit = Number(req.query.limit || 20);
+    const items = await listImportBatches(limit);
+
+    return res.json({
+      ok: true,
+      items
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "No se pudo obtener el historial de importaciones"
+    });
+  }
+}
+
+module.exports = { uploadImport, getImportStatus, getImportHistory };

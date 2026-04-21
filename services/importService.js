@@ -40,6 +40,18 @@ function validateAndGetFechaCorte(bdoOriginalName, cnvOriginalName) {
   return bdoDate;
 }
 
+function resolveAsOfDateFromOptionalFiles({ bdoOriginalName, cnvOriginalName }) {
+  if (!bdoOriginalName && !cnvOriginalName) {
+    throw new Error("Debes enviar al menos un archivo");
+  }
+
+  if (bdoOriginalName && cnvOriginalName) {
+    return validateAndGetFechaCorte(bdoOriginalName, cnvOriginalName);
+  }
+
+  return parseFechaCorteFromFilename(bdoOriginalName || cnvOriginalName);
+}
+
 let cachedImportBatchCols = null;
 async function getColumnsSet(tableName) {
   const pool = getPool();
@@ -76,21 +88,23 @@ async function createOrGetBatch({ asOfDate, bdoName, cnvName, userLabel }) {
     [asOfDate]
   );
 
+  const sourceParts = [];
+  if (bdoName) sourceParts.push(`bdo=${bdoName}`);
+  if (cnvName) sourceParts.push(`cnv=${cnvName}`);
+
   if (existing.length) {
-    // Reutilizamos el batch pero lo dejamos listo para reproceso
     const batchId = existing[0].batch_id;
 
     await updateImportBatch(batchId, {
       status: "processing",
       error_message: null,
-      // si existen estas columnas en tu tabla, se resetean:
       total_rows: 0,
       inserted_rows: 0,
       updated_rows: 0,
       error_rows: 0,
       file_name: `CORTE_${asOfDate}`,
       source: "manual_upload",
-      source_path: `bdo=${bdoName};cnv=${cnvName}`,
+      source_path: sourceParts.join(";") || "sin_archivos_nuevos",
       uploaded_by: userLabel || "unknown"
     });
 
@@ -100,7 +114,7 @@ async function createOrGetBatch({ asOfDate, bdoName, cnvName, userLabel }) {
   const payload = {
     file_name: `CORTE_${asOfDate}`,
     source: "manual_upload",
-    source_path: `bdo=${bdoName};cnv=${cnvName}`,
+    source_path: sourceParts.join(";") || "sin_archivos_nuevos",
     uploaded_by: userLabel || "unknown",
     as_of_date: asOfDate,
     status: "processing"
@@ -135,7 +149,7 @@ function mapBdoHeader(header) {
     DEPARTAMENTO: "departamento",
     MUNICIPIO: "municipio",
     CIRCUITO: "circuito",
-    EPIN: "epin",
+    EPIN: "epin_raw",
     ES_EPIN: "es_epin",
     ES_EPIN_: "es_epin",
     ES_EPIN__1: "es_epin",
@@ -185,7 +199,7 @@ function map2CnvHeader(header) {
   const map = {
     DISTRIBUIDORA: "distribuidora",
     ESTADO: "estado",
-    EPIN: "epin",
+    EPIN: "epin_raw",
     TIPO: "tipo",
     SALDO: "saldo"
   };
@@ -203,6 +217,94 @@ function isValidEpin(epin) {
   // solo dígitos, entre 1 y 32 
   return typeof epin === "string" && /^[0-9]{1,32}$/.test(epin);
 }
+
+function splitBdoEpins(raw) {
+  const s = String(raw ?? "")
+    .replace(/\r?\n/g, "")
+    .trim();
+
+  if (!s) return [];
+
+  const parts = s
+    .split(/[;|]/g)               // soporta ; y |
+    .map((x) => x.replace(/\s+/g, "").trim())
+    .filter(Boolean)
+    .filter(isValidEpin);
+
+  return [...new Set(parts)];
+}
+
+async function normalizeBdoEpins(batchId) {
+  const pool = getPool();
+
+  await pool.query("DELETE FROM stg_bdo_epin WHERE batch_id=?", [batchId]);
+
+  const [rows] = await pool.query(
+    `
+    SELECT batch_id, id_dms, epin_raw, es_epin, estado_pdv
+    FROM stg_bdo
+    WHERE batch_id = ?
+      AND id_dms IS NOT NULL
+      AND id_dms <> ''
+      AND epin_raw IS NOT NULL
+      AND epin_raw <> ''
+      AND (UPPER(TRIM(es_epin)) = 'SI' OR TRIM(es_epin) = '1')
+    `,
+    [batchId]
+  );
+
+  const cols = ["batch_id", "id_dms", "epin", "es_epin", "estado_pdv"];
+  const buffer = [];
+  let insertedRows = 0;
+  let skippedRows = 0;
+
+  const flush = async () => {
+    if (!buffer.length) return;
+
+    const { sql, values } = chunkInsertSql("stg_bdo_epin", cols, buffer);
+
+    await pool.query(
+      `
+      ${sql}
+      ON DUPLICATE KEY UPDATE
+        es_epin = VALUES(es_epin),
+        estado_pdv = VALUES(estado_pdv)
+      `,
+      values
+    );
+
+    insertedRows += buffer.length;
+    buffer.length = 0;
+  };
+
+  for (const row of rows) {
+    const epins = splitBdoEpins(row.epin_raw);
+
+    if (!epins.length) {
+      skippedRows++;
+      continue;
+    }
+
+    for (const epin of epins) {
+      buffer.push([
+        row.batch_id,
+        row.id_dms,
+        epin,
+        row.es_epin,
+        row.estado_pdv
+      ]);
+
+      if (buffer.length >= 2000) {
+        await flush();
+      }
+    }
+  }
+
+  await flush();
+
+  return { insertedRows, skippedRows };
+}
+
 
 function toStrOrNull(v) {
   const s = String(v ?? "").trim();
@@ -279,11 +381,7 @@ const parser = parse({
             }
 
             // validar EPIN antes de meterlo al row
-            const epin = toStrOrNull(record.epin);
-            if (epin && !isValidEpin(epin)) {
-                skippedRows++;
-                return;
-            }
+            const epin_raw = toStrOrNull(record.epin_raw);
             const lat = toNumOrNull(record.lat);
             const lon = toNumOrNull(record.lon);
 
@@ -297,7 +395,7 @@ const parser = parse({
               departamento: toStrOrNull(record.departamento),
               municipio: toStrOrNull(record.municipio),
               circuito: toStrOrNull(record.circuito),
-              epin,
+              epin_raw,
               es_epin: toStrOrNull(record.es_epin),
               estado_pdv: toStrOrNull(record.estado_pdv),
               nombre_pdv: toStrOrNull(record.nombre_pdv),
@@ -357,7 +455,6 @@ const parser = parse({
 async function runUpsertsAndSnapshots(batchId) {
   const pool = getPool();
 
-  // Conteos previos (aprox insert vs update)
   const [[pdvDistinctRow]] = await pool.query(
     "SELECT COUNT(DISTINCT id_dms) AS cnt FROM stg_bdo WHERE batch_id=?",
     [batchId]
@@ -371,13 +468,13 @@ async function runUpsertsAndSnapshots(batchId) {
   const pdvExisting = pdvExistingRow.cnt || 0;
 
   const [[epinDistinctRow]] = await pool.query(
-    "SELECT COUNT(DISTINCT epin) AS cnt FROM stg_bdo WHERE batch_id=? AND epin IS NOT NULL AND epin<>'' AND (UPPER(TRIM(es_epin))='SI' OR TRIM(es_epin)='1')",
+    "SELECT COUNT(DISTINCT epin) AS cnt FROM stg_bdo_epin WHERE batch_id=?",
     [batchId]
   );
   const epinDistinct = epinDistinctRow.cnt || 0;
 
   const [[epinExistingRow]] = await pool.query(
-    "SELECT COUNT(*) AS cnt FROM epin WHERE epin IN (SELECT DISTINCT epin FROM stg_bdo WHERE batch_id=? AND epin IS NOT NULL AND epin<>'' AND (UPPER(TRIM(es_epin))='SI' OR TRIM(es_epin)='1'))",
+    "SELECT COUNT(*) AS cnt FROM epin WHERE epin IN (SELECT DISTINCT epin FROM stg_bdo_epin WHERE batch_id=?)",
     [batchId]
   );
   const epinExisting = epinExistingRow.cnt || 0;
@@ -452,7 +549,7 @@ async function runUpsertsAndSnapshots(batchId) {
       1,
       src.batch_id
     FROM (
-      -- A) EPINs que vienen en BDO
+      -- A) EPINs normalizados desde BDO
       SELECT
         b.batch_id,
         b.epin,
@@ -463,7 +560,15 @@ async function runUpsertsAndSnapshots(batchId) {
           WHEN c.estado IN ('Inactive','INACTIVO') THEN 'INACTIVO'
           ELSE 'ACTIVO'
         END AS estado_epin
-      FROM stg_bdo b
+      FROM (
+        SELECT
+          batch_id,
+          epin,
+          MAX(id_dms) AS id_dms
+        FROM stg_bdo_epin
+        WHERE batch_id = ?
+        GROUP BY batch_id, epin
+      ) b
       JOIN pdv p ON p.id_dms = b.id_dms
       LEFT JOIN (
         SELECT
@@ -476,14 +581,10 @@ async function runUpsertsAndSnapshots(batchId) {
           AND epin <> ''
         GROUP BY batch_id, epin
       ) c ON c.batch_id = b.batch_id AND c.epin = b.epin
-      WHERE b.batch_id = ?
-        AND b.epin IS NOT NULL
-        AND b.epin <> ''
-        AND (UPPER(TRIM(b.es_epin)) = 'SI' OR TRIM(b.es_epin) = '1')
 
       UNION
 
-      -- B) EPINs que vienen solo en 2CNV (sin ID_DMS todavía)
+      -- B) EPINs que vienen solo en 2CNV
       SELECT
         c.batch_id,
         c.epin,
@@ -507,11 +608,8 @@ async function runUpsertsAndSnapshots(batchId) {
       ) c
       LEFT JOIN (
         SELECT DISTINCT epin
-        FROM stg_bdo
+        FROM stg_bdo_epin
         WHERE batch_id = ?
-          AND epin IS NOT NULL
-          AND epin <> ''
-          AND (UPPER(TRIM(es_epin)) = 'SI' OR TRIM(es_epin) = '1')
       ) b ON b.epin = c.epin
       WHERE b.epin IS NULL
     ) src
@@ -521,9 +619,14 @@ async function runUpsertsAndSnapshots(batchId) {
       activo = 1,
       last_seen_batch_id = VALUES(last_seen_batch_id)
   `;
-  const [epinRes] = await pool.query(upsertEpinSql, [batchId, batchId, batchId, batchId]);
+  const [epinRes] = await pool.query(upsertEpinSql, [
+    batchId,
+    batchId,
+    batchId,
+    batchId
+  ]);
 
-  // 3) SNAPSHOT: para consistencia, limpiamos y regeneramos el batch
+  // 3) SNAPSHOT
   await pool.query("DELETE FROM epin_snapshot WHERE batch_id=?", [batchId]);
 
   const insertSnapshotSql = `
@@ -542,19 +645,19 @@ async function runUpsertsAndSnapshots(batchId) {
       src.saldo_epin,
       src.features_json
     FROM (
-      -- A) EPINs que sí vienen en BDO
+      -- A) EPINs desde BDO normalizado
       SELECT
-        x.batch_id,
-        x.id_dms,
-        x.epin,
+        b.batch_id,
+        b.id_dms,
+        b.epin,
         p.pdv_id,
-        x.estado_pdv,
+        b.estado_pdv,
         c.saldo AS saldo_epin,
         JSON_OBJECT(
           'distribuidora', c.distribuidora,
           'tipo', c.tipo,
           'tiene_id_dms', true,
-          'origen', 'BDO'
+          'origen', 'BDO_SPLIT'
         ) AS features_json
       FROM (
         SELECT
@@ -562,14 +665,11 @@ async function runUpsertsAndSnapshots(batchId) {
           epin,
           MAX(id_dms) AS id_dms,
           MAX(estado_pdv) AS estado_pdv
-        FROM stg_bdo
+        FROM stg_bdo_epin
         WHERE batch_id = ?
-          AND epin IS NOT NULL
-          AND epin <> ''
-          AND (UPPER(TRIM(es_epin)) = 'SI' OR TRIM(es_epin) = '1')
         GROUP BY batch_id, epin
-      ) x
-      JOIN pdv p ON p.id_dms = x.id_dms
+      ) b
+      JOIN pdv p ON p.id_dms = b.id_dms
       LEFT JOIN (
         SELECT
           batch_id,
@@ -582,7 +682,7 @@ async function runUpsertsAndSnapshots(batchId) {
           AND epin IS NOT NULL
           AND epin <> ''
         GROUP BY batch_id, epin
-      ) c ON c.batch_id = x.batch_id AND c.epin = x.epin
+      ) c ON c.batch_id = b.batch_id AND c.epin = b.epin
 
       UNION
 
@@ -615,11 +715,8 @@ async function runUpsertsAndSnapshots(batchId) {
       ) c
       LEFT JOIN (
         SELECT DISTINCT epin
-        FROM stg_bdo
+        FROM stg_bdo_epin
         WHERE batch_id = ?
-          AND epin IS NOT NULL
-          AND epin <> ''
-          AND (UPPER(TRIM(es_epin)) = 'SI' OR TRIM(es_epin) = '1')
       ) b ON b.epin = c.epin
       WHERE b.epin IS NULL
     ) src
@@ -632,7 +729,12 @@ async function runUpsertsAndSnapshots(batchId) {
       saldo_epin = VALUES(saldo_epin),
       features_json = VALUES(features_json)
   `;
-  const [snapRes] = await pool.query(insertSnapshotSql, [batchId, batchId, batchId, batchId]);
+  const [snapRes] = await pool.query(insertSnapshotSql, [
+    batchId,
+    batchId,
+    batchId,
+    batchId
+  ]);
 
   return {
     pdv: {
@@ -655,10 +757,149 @@ async function runUpsertsAndSnapshots(batchId) {
   };
 }
 
-async function resetStaging(batchId) {
+async function resetStaging() {
   const pool = getPool();
+  await pool.query("TRUNCATE TABLE stg_bdo_epin");
   await pool.query("TRUNCATE TABLE stg_bdo");
   await pool.query("TRUNCATE TABLE stg_2cnv");
+}
+
+async function countRowsByBatch(table, batchId) {
+  const pool = getPool();
+  const [[row]] = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM ${table} WHERE batch_id = ?`,
+    [batchId]
+  );
+  return Number(row?.cnt || 0);
+}
+
+async function clearBatchStaging(batchId, { clearBdo = false, clearCnv = false } = {}) {
+  const pool = getPool();
+
+  if (clearBdo) {
+    await pool.query("DELETE FROM stg_bdo_epin WHERE batch_id = ?", [batchId]);
+    await pool.query("DELETE FROM stg_bdo WHERE batch_id = ?", [batchId]);
+  }
+
+  if (clearCnv) {
+    await pool.query("DELETE FROM stg_2cnv WHERE batch_id = ?", [batchId]);
+  }
+}
+
+async function findLatestReusableBatchForTable({ table, excludeBatchId, asOfDate }) {
+  const pool = getPool();
+
+  const [rows] = await pool.query(
+    `
+    SELECT ib.batch_id, ib.as_of_date
+    FROM import_batch ib
+    WHERE ib.status = 'done'
+      AND ib.batch_id <> ?
+      AND ib.as_of_date <= ?
+      AND EXISTS (
+        SELECT 1
+        FROM ${table} s
+        WHERE s.batch_id = ib.batch_id
+        LIMIT 1
+      )
+    ORDER BY ib.as_of_date DESC, ib.batch_id DESC
+    LIMIT 1
+    `,
+    [excludeBatchId, asOfDate]
+  );
+
+  return rows[0] || null;
+}
+
+async function cloneBdoToBatch(fromBatchId, toBatchId) {
+  const pool = getPool();
+
+  await pool.query(
+    `
+    INSERT INTO stg_bdo (
+      batch_id, id_dms, departamento, municipio, circuito,
+      epin_raw, es_epin, estado_pdv, nombre_pdv, direccion,
+      categoria, lat, lon, propietario, distribuidor
+    )
+    SELECT
+      ?, id_dms, departamento, municipio, circuito,
+      epin_raw, es_epin, estado_pdv, nombre_pdv, direccion,
+      categoria, lat, lon, propietario, distribuidor
+    FROM stg_bdo
+    WHERE batch_id = ?
+    `,
+    [toBatchId, fromBatchId]
+  );
+}
+
+async function cloneCnvToBatch(fromBatchId, toBatchId) {
+  const pool = getPool();
+
+  await pool.query(
+    `
+    INSERT INTO stg_2cnv (
+      batch_id, distribuidora, estado, epin, tipo, saldo
+    )
+    SELECT
+      ?, distribuidora, estado, epin, tipo, saldo
+    FROM stg_2cnv
+    WHERE batch_id = ?
+    `,
+    [toBatchId, fromBatchId]
+  );
+}
+
+async function resolveBatchSources({ batchId, asOfDate, hasNewBdo, hasNewCnv }) {
+  const currentBdoRows = await countRowsByBatch("stg_bdo", batchId);
+  const currentCnvRows = await countRowsByBatch("stg_2cnv", batchId);
+
+  let bdoSource = {
+    mode: hasNewBdo ? "upload" : null,
+    fromBatchId: null
+  };
+
+  let cnvSource = {
+    mode: hasNewCnv ? "upload" : null,
+    fromBatchId: null
+  };
+
+  if (!hasNewBdo) {
+    if (currentBdoRows > 0) {
+      bdoSource = { mode: "reuse-current", fromBatchId: batchId };
+    } else {
+      const fallback = await findLatestReusableBatchForTable({
+        table: "stg_bdo",
+        excludeBatchId: batchId,
+        asOfDate
+      });
+
+      if (!fallback) {
+        throw new Error("No existe un BDO previo para reutilizar");
+      }
+
+      bdoSource = { mode: "reuse-clone", fromBatchId: fallback.batch_id };
+    }
+  }
+
+  if (!hasNewCnv) {
+    if (currentCnvRows > 0) {
+      cnvSource = { mode: "reuse-current", fromBatchId: batchId };
+    } else {
+      const fallback = await findLatestReusableBatchForTable({
+        table: "stg_2cnv",
+        excludeBatchId: batchId,
+        asOfDate
+      });
+
+      if (!fallback) {
+        throw new Error("No existe un 2CNV previo para reutilizar");
+      }
+
+      cnvSource = { mode: "reuse-clone", fromBatchId: fallback.batch_id };
+    }
+  }
+
+  return { bdoSource, cnvSource };
 }
 
 async function runImportPipeline({
@@ -671,46 +912,131 @@ async function runImportPipeline({
   userLabel
 }) {
   const start = Date.now();
+  const hasNewBdo = Boolean(bdoPath);
+  const hasNewCnv = Boolean(cnvPath);
 
   try {
+    const { bdoSource, cnvSource } = await resolveBatchSources({
+      batchId,
+      asOfDate,
+      hasNewBdo,
+      hasNewCnv
+    });
+
     await updateImportBatch(batchId, {
       status: "processing",
       error_message: null,
       file_name: `CORTE_${asOfDate}`,
       source: "manual_upload",
-      source_path: `bdo=${bdoOriginalName};cnv=${cnvOriginalName}`,
+      source_path: [
+        hasNewBdo
+          ? `bdo=${bdoOriginalName}`
+          : `bdo=REUSED_FROM_BATCH_${bdoSource.fromBatchId}`,
+        hasNewCnv
+          ? `cnv=${cnvOriginalName}`
+          : `cnv=REUSED_FROM_BATCH_${cnvSource.fromBatchId}`
+      ].join(";"),
       uploaded_by: userLabel || "unknown"
     });
 
-    logger.info("Import pipeline start", { batchId, asOfDate });
-
-    // limpia staging para reintentos (idempotente)
-    await resetStaging();
-
-    // carga a staging (batchSize ajustado por tamaño de filas)
-    const bdoLoad = await loadDataToStaging({
-      table: "stg_bdo",
+    logger.info("Import pipeline start", {
       batchId,
-      filePath: bdoPath
+      asOfDate,
+      hasNewBdo,
+      hasNewCnv,
+      bdoSource,
+      cnvSource
     });
 
-    const cnvLoad = await loadDataToStaging({
-      table: "stg_2cnv",
-      batchId,
-      filePath: cnvPath
+    await clearBatchStaging(batchId, {
+      clearBdo: bdoSource.mode === "upload" || bdoSource.mode === "reuse-clone",
+      clearCnv: cnvSource.mode === "upload" || cnvSource.mode === "reuse-clone"
     });
 
-    // upserts + snapshots
+    let bdoLoad = { insertedRows: 0, reused: false };
+    let cnvLoad = { insertedRows: 0, reused: false };
+    let bdoNormalize = { insertedRows: 0, skippedRows: 0, reused: false };
+
+    if (bdoSource.mode === "upload") {
+      bdoLoad = await loadDataToStaging({
+        table: "stg_bdo",
+        batchId,
+        filePath: bdoPath
+      });
+
+      bdoNormalize = await normalizeBdoEpins(batchId);
+    } else if (bdoSource.mode === "reuse-clone") {
+      await cloneBdoToBatch(bdoSource.fromBatchId, batchId);
+
+      const clonedRows = await countRowsByBatch("stg_bdo", batchId);
+      bdoLoad = {
+        insertedRows: clonedRows,
+        reused: true,
+        reusedFromBatchId: bdoSource.fromBatchId
+      };
+
+      bdoNormalize = await normalizeBdoEpins(batchId);
+    } else {
+      const currentBdoRows = await countRowsByBatch("stg_bdo", batchId);
+      const currentBdoEpinRows = await countRowsByBatch("stg_bdo_epin", batchId);
+
+      bdoLoad = {
+        insertedRows: currentBdoRows,
+        reused: true,
+        reusedFromBatchId: batchId
+      };
+
+      if (currentBdoEpinRows === 0 && currentBdoRows > 0) {
+        bdoNormalize = await normalizeBdoEpins(batchId);
+      } else {
+        bdoNormalize = {
+          insertedRows: currentBdoEpinRows,
+          skippedRows: 0,
+          reused: true
+        };
+      }
+    }
+
+    if (cnvSource.mode === "upload") {
+      cnvLoad = await loadDataToStaging({
+        table: "stg_2cnv",
+        batchId,
+        filePath: cnvPath
+      });
+    } else if (cnvSource.mode === "reuse-clone") {
+      await cloneCnvToBatch(cnvSource.fromBatchId, batchId);
+
+      const clonedRows = await countRowsByBatch("stg_2cnv", batchId);
+      cnvLoad = {
+        insertedRows: clonedRows,
+        reused: true,
+        reusedFromBatchId: cnvSource.fromBatchId
+      };
+    } else {
+      const currentCnvRows = await countRowsByBatch("stg_2cnv", batchId);
+      cnvLoad = {
+        insertedRows: currentCnvRows,
+        reused: true,
+        reusedFromBatchId: batchId
+      };
+    }
+
     const upserts = await runUpsertsAndSnapshots(batchId);
 
-    // conteo total filas staging (para reportar)
     const pool = getPool();
+
     const [[bdoCnt]] = await pool.query(
       "SELECT COUNT(*) AS cnt FROM stg_bdo WHERE batch_id=?",
       [batchId]
     );
+
     const [[cnvCnt]] = await pool.query(
       "SELECT COUNT(*) AS cnt FROM stg_2cnv WHERE batch_id=?",
+      [batchId]
+    );
+
+    const [[bdoEpinCnt]] = await pool.query(
+      "SELECT COUNT(*) AS cnt FROM stg_bdo_epin WHERE batch_id=?",
       [batchId]
     );
 
@@ -724,8 +1050,20 @@ async function runImportPipeline({
       batchId,
       asOfDate,
       files: {
-        bdo: { originalName: bdoOriginalName, insertedStaging: bdoLoad.insertedRows },
-        cnv: { originalName: cnvOriginalName, insertedStaging: cnvLoad.insertedRows }
+        bdo: {
+          originalName: bdoOriginalName || null,
+          insertedStaging: bdoLoad.insertedRows,
+          normalizedEpins: bdoEpinCnt.cnt || 0,
+          skippedNormalizedRows: bdoNormalize.skippedRows || 0,
+          reused: Boolean(bdoLoad.reused),
+          reusedFromBatchId: bdoLoad.reusedFromBatchId || null
+        },
+        cnv: {
+          originalName: cnvOriginalName || null,
+          insertedStaging: cnvLoad.insertedRows,
+          reused: Boolean(cnvLoad.reused),
+          reusedFromBatchId: cnvLoad.reusedFromBatchId || null
+        }
       },
       upserts,
       durationMs: Date.now() - start
@@ -771,10 +1109,15 @@ async function loadDataToStaging({ table, batchId, filePath }) {
         departamento = NULLIF(TRIM(@DEPARTAMENTO), ''),
         municipio = NULLIF(TRIM(@MUNICIPIO), ''),
         circuito = NULLIF(TRIM(@CIRCUITO), ''),
-        epin = CASE
-          WHEN TRIM(@EPIN) REGEXP '^[0-9]{1,32}$' THEN TRIM(@EPIN)
-          ELSE NULL
-        END,
+        epin_raw = NULLIF(
+          TRIM(
+            REPLACE(
+              REPLACE(@EPIN, '\r', ''),
+              '\n', ''
+            )
+          ),
+          ''
+        ),
         es_epin = NULLIF(TRIM(@ES_EPIN), ''),
         estado_pdv = NULLIF(TRIM(@ESTADO), ''),
         nombre_pdv = NULLIF(TRIM(@NOMBRE), ''),
@@ -848,9 +1191,40 @@ async function loadDataToStaging({ table, batchId, filePath }) {
   throw new Error(`Tabla staging no soportada: ${table}`);
 }
 
+async function listImportBatches(limit = 20) {
+  const pool = getPool();
+
+  const [rows] = await pool.query(
+    `
+    SELECT
+      batch_id,
+      as_of_date,
+      status,
+      file_name,
+      source,
+      source_path,
+      uploaded_by,
+      total_rows,
+      inserted_rows,
+      updated_rows,
+      inactivated_rows,
+      error_message,
+      created_at
+    FROM import_batch
+    ORDER BY batch_id DESC
+    LIMIT ?
+    `,
+    [Number(limit) || 20]
+  );
+
+  return rows;
+}
+
 module.exports = {
+  resolveAsOfDateFromOptionalFiles,
   validateAndGetFechaCorte,
   createOrGetBatch,
   runImportPipeline,
-  getBatchStatus
+  getBatchStatus,
+  listImportBatches
 };

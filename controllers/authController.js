@@ -12,9 +12,18 @@ async function login(req, res) {
 
     const pool = getPool();
 
-    //nombres según DB real 
     const [rows] = await pool.query(
-      "SELECT web_user_id, name, email, password_hash, role, is_active FROM web_user WHERE email = ? LIMIT 1",
+      `SELECT 
+          web_user_id AS id,
+          name,
+          email,
+          password_hash,
+          role,
+          region,
+          is_active
+       FROM web_user
+       WHERE email = ?
+       LIMIT 1`,
       [email]
     );
 
@@ -34,7 +43,13 @@ async function login(req, res) {
     }
 
     const token = jwt.sign(
-      { uid: user.id, uname: user.name, role: user.role, email: user.email },
+      {
+        uid: user.id,
+        uname: user.name,
+        role: user.role,
+        email: user.email,
+        region: user.region
+      },
       process.env.JWT_SECRET,
       { expiresIn: "8h" }
     );
@@ -42,7 +57,13 @@ async function login(req, res) {
     return res.json({
       ok: true,
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        region: user.region
+      }
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
