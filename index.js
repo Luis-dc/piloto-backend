@@ -10,6 +10,7 @@ const importRoutes = require("./routes/importRoutes");
 const botRoutes = require("./routes/botRoutes");
 const interesadoRoutes = require("./routes/interesadoRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use(importRoutes)
 app.use(botRoutes);
 app.use(interesadoRoutes);
 app.use(analyticsRoutes);
+app.use(userRoutes);
 
 // Middleware de errores
 app.use(errorMiddleware);
