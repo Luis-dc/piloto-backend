@@ -112,15 +112,29 @@ function formatMiTienda(value) {
   return Number(value) === 1 ? "SI" : "NO";
 }
 
+function resolveEpinBanner(record, includeEpinBanner) {
+  if (!includeEpinBanner) return null;
+
+  const estado = toText(record?.estado_epin).toUpperCase();
+
+  if (estado === "ACTIVO") return "**ES EPIN**";
+  if (estado === "BLOQUEADO") return "**EPIN BLOQUEADO**";
+  if (estado === "INACTIVO") return "**EPIN INACTIVO**";
+
+  return "**EPIN ENCONTRADO**";
+}
+
 function formatFicha(record, opts = {}) {
   const includeEpinBanner = Boolean(opts.includeEpinBanner);
   const actions = buildMapActions(record);
-  //const { waze, maps } = buildMapUrls(record);
 
   const lines = [];
-  if (includeEpinBanner) lines.push("**ES EPIN**");
+  const banner = resolveEpinBanner(record, includeEpinBanner);
+
+  if (banner) lines.push(banner);
   lines.push("**Información asociada:**");
   lines.push(`**EPIN:** ${record?.epin || "N/D"}`);
+  lines.push(`**Estado EPIN:** ${record?.estado_epin || "N/D"}`);
   lines.push(`**ID DMS:** ${record?.id_dms || "N/D"}`);
   lines.push(`**Circuito:** ${record?.circuito || "N/D"}`);
   lines.push(`**Nombre PDV:** ${record?.nombre_pdv || "N/D"}`);
@@ -130,12 +144,6 @@ function formatFicha(record, opts = {}) {
   lines.push(`**Categoria:** ${record?.categoria || "N/D"}`);
   lines.push(`**Distribuidor:** ${record?.distribuidor || "N/D"}`);
   lines.push(`**Tiene MI TIENDA:** ${formatMiTienda(record?.mi_tienda)}`);
-
-  /*if (waze || maps) {
-    lines.push("Ver ubicación en mapa:");
-    if (waze) lines.push(`Waze: ${waze}`);
-    if (maps) lines.push(`Google Maps: ${maps}`);
-  }*/
 
   return {
     text: lines.join("\n"),

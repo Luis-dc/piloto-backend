@@ -173,7 +173,7 @@ async function getEpinSegments(groupBy = "departamento") {
       LEFT JOIN pdv p
         ON p.pdv_id = s.pdv_id
       WHERE s.batch_id = ?
-        AND s.estado_epin IN ('BLOQUEADO', 'INACTIVO')
+        AND s.estado_epin IN ('BLOQUEADO')
       ORDER BY
         COALESCE(${groupColumn}, 'Sin dato') ASC,
         p.nombre_pdv ASC,
