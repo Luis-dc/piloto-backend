@@ -639,6 +639,13 @@ async function processMessage(event) {
       data_json: stateData
     });
   } catch (error) {
+    console.error("ERROR REAL DEL BOT:", {
+      message: error.message,
+      code: error.code,
+      sqlMessage: error.sqlMessage,
+      sql: error.sql,
+      stack: error.stack
+    });
     action = action || "SYSTEM";
     result = "ERROR";
     response = {
