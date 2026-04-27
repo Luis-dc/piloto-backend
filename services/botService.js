@@ -314,7 +314,7 @@ async function processMessage(event) {
 
         case STATES.INT_WAIT_ID_DMS: {
           action = "INTERESADO";
-
+        
           if (!isDigits(rawText)) {
             result = "INVALID";
             response = {
@@ -325,8 +325,9 @@ async function processMessage(event) {
             stateAfter = STATES.INT_WAIT_ID_DMS;
             break;
           }
-
+        
           const pdv = await pdvModel.findByIdDms(rawText);
+        
           if (!pdv) {
             result = "NOT_FOUND";
             response = {
@@ -337,47 +338,131 @@ async function processMessage(event) {
             stateAfter = STATES.INT_WAIT_ID_DMS;
             break;
           }
-
+        
           pdvId = pdv.pdv_id || null;
           epinId = pdv.epin_id || null;
           result = "IN_PROGRESS";
+        
           response = {
-            text: "Ingrese su número Tigo.",
+            text:
+              "PDV encontrado.\n" +
+              `ID DMS: ${pdv.id_dms || "N/D"}\n` +
+              `Nombre PDV: ${pdv.nombre_pdv || "N/D"}\n` +
+              "Ingrese un número de teléfono de referencia.",
             suggested: ["menu"],
             actions: []
           };
+        
           stateAfter = STATES.INT_WAIT_TELEFONO;
+        
           stateData = {
             pdv_id: pdv.pdv_id,
             epin_id: pdv.epin_id,
+            id_dms: pdv.id_dms,
             epin: pdv.epin,
-            id_dms: pdv.id_dms
+        
+            nombre_pdv: pdv.nombre_pdv,
+            propietario: pdv.propietario,
+            direccion: pdv.direccion,
+            departamento: pdv.departamento,
+            municipio: pdv.municipio,
+            lat: pdv.lat,
+            lon: pdv.lon,
+        
+            categoria: pdv.categoria,
+            circuito: pdv.circuito,
+            distribuidor: pdv.distribuidor,
+            estado_pdv: pdv.estado_pdv,
+            mi_tienda: pdv.mi_tienda,
+            otros_epin: pdv.otros_epin || null
           };
+        
           break;
         }
 
         case STATES.INT_WAIT_TELEFONO: {
           action = "INTERESADO";
-
+        
           if (!isPhone(rawText)) {
             result = "INVALID";
             response = {
-              text: "El número Tigo no es válido. Ingrese solo números.",
+              text: "El número de teléfono no es válido. Ingrese solo números.",
               suggested: ["menu"],
               actions: []
             };
             stateAfter = STATES.INT_WAIT_TELEFONO;
             break;
           }
-
-          result = "IN_PROGRESS";
+        
+          const finalData = {
+            ...stateData,
+            telefono: rawText
+          };
+        
+          const createResult = await interesadoModel.createInteresado({
+            channel,
+            created_by_user_channel_id: userId,
+            created_by_name: userName,
+            created_by_web_user_id: event.webUserId || null,
+        
+            input_type: "ID_DMS",
+            input_value: finalData.id_dms,
+        
+            pdv_id: finalData.pdv_id,
+            epin_id: finalData.epin_id,
+        
+            id_dms: finalData.id_dms,
+            epin_reportado: finalData.epin || null,
+            telefono: finalData.telefono,
+        
+            nombre_pdv: finalData.nombre_pdv,
+            propietario: finalData.propietario,
+            direccion: finalData.direccion,
+            departamento: finalData.departamento,
+            municipio: finalData.municipio,
+            lat: finalData.lat,
+            lon: finalData.lon,
+        
+            data_json: {
+              conversationId,
+              payload,
+              createdByRole: event.userRole || null,
+              createdByRegion: event.userRegion || null,
+              categoria: finalData.categoria || null,
+              circuito: finalData.circuito || null,
+              distribuidor: finalData.distribuidor || null,
+              estado_pdv: finalData.estado_pdv || null,
+              mi_tienda: finalData.mi_tienda ?? null,
+              otros_epin: finalData.otros_epin || null
+            }
+          });
+        
+          result = "SUCCESS";
+        
           response = {
-            text: "Ingrese el nombre del punto de venta.",
-            suggested: ["menu"],
+            text:
+              "Solicitud registrada.\n" +
+              `Solicitud ID: ${createResult.interesadoId}\n` +
+              `ID DMS: ${finalData.id_dms || "N/D"}\n` +
+              `EPIN: ${finalData.epin || "N/D"}\n` +
+              `Nombre PDV: ${finalData.nombre_pdv || "N/D"}\n` +
+              `Propietario: ${finalData.propietario || "N/D"}\n` +
+              `Teléfono: ${finalData.telefono || "N/D"}\n` +
+              `Dirección: ${finalData.direccion || "N/D"}\n` +
+              `Departamento: ${finalData.departamento || "N/D"}\n` +
+              `Municipio: ${finalData.municipio || "N/D"}\n` +
+              `Latitud: ${finalData.lat || "N/D"}\n` +
+              `Longitud: ${finalData.lon || "N/D"}`,
+            suggested: ["1", "2", "3", "menu"],
             actions: []
           };
-          stateAfter = STATES.INT_WAIT_NOMBRE_PDV;
-          stateData = { ...stateData, telefono: rawText };
+        
+          pdvId = finalData.pdv_id || null;
+          epinId = finalData.epin_id || null;
+        
+          stateAfter = STATES.MENU;
+          stateData = {};
+        
           break;
         }
 
