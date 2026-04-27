@@ -24,6 +24,7 @@ async function findByIdDms(idDms) {
       p.id_dms,
       p.nombre_pdv,
       p.categoria,
+      p.estado_pdv,
       p.propietario,
       p.circuito,
       p.distribuidor,

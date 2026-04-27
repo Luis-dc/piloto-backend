@@ -138,6 +138,7 @@ function formatFicha(record, opts = {}) {
   lines.push(`**ID DMS:** ${record?.id_dms || "N/D"}`);
   lines.push(`**Circuito:** ${record?.circuito || "N/D"}`);
   lines.push(`**Nombre PDV:** ${record?.nombre_pdv || "N/D"}`);
+  lines.push(`**Estado:** ${record?.estado_pdv || "N/D"}`);
   lines.push(`**Propietario:** ${record?.propietario || "N/D"}`);
   lines.push(`**Departamento:** ${record?.departamento || "N/D"}`);
   lines.push(`**Municipio:** ${record?.municipio || "N/D"}`);
