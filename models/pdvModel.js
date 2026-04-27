@@ -1,24 +1,52 @@
 const { getPool } = require("../db/pool");
 
-async function getLatestDoneBatch(pool) {
-  const [[row]] = await pool.query(`
-    SELECT batch_id, as_of_date
-    FROM import_batch
-    WHERE status = 'done'
-    ORDER BY as_of_date DESC, batch_id DESC
-    LIMIT 1
-  `);
+function buildPdvWithEpins(pdv, epins) {
+  const epinPrincipal = epins[0] || null;
 
-  return row || null;
+  const otrosEpin = epins
+    .slice(1)
+    .map((item) => item.epin)
+    .join(", ");
+
+  return {
+    ...pdv,
+
+    epin_id: epinPrincipal?.epin_id || null,
+    epin: epinPrincipal?.epin || null,
+    estado_epin: epinPrincipal?.estado_epin || null,
+
+    otros_epin: otrosEpin || null
+  };
+}
+
+async function findEpinsByPdvId(pool, pdvId) {
+  const sql = `
+    SELECT
+      e.epin_id,
+      e.epin,
+      e.estado_epin
+    FROM epin e
+    WHERE e.pdv_id = ?
+      AND e.activo = 1
+    ORDER BY
+      CASE e.estado_epin
+        WHEN 'ACTIVO' THEN 1
+        WHEN 'BLOQUEADO' THEN 2
+        WHEN 'INACTIVO' THEN 3
+        WHEN 'BAJA' THEN 4
+        ELSE 5
+      END,
+      e.epin ASC
+  `;
+
+  const [rows] = await pool.query(sql, [pdvId]);
+  return rows;
 }
 
 async function findByIdDms(idDms) {
   const pool = getPool();
-  const latestBatch = await getLatestDoneBatch(pool);
 
-  if (!latestBatch) return null;
-
-  const sql = `
+  const pdvSql = `
     SELECT
       p.pdv_id,
       p.id_dms,
@@ -33,43 +61,33 @@ async function findByIdDms(idDms) {
       p.direccion,
       p.lat,
       p.lon,
-      p.mi_tienda,
-      s.epin_id,
-      s.epin,
-      s.estado_epin
+      p.mi_tienda
     FROM pdv p
-    LEFT JOIN epin_snapshot s
-      ON s.pdv_id = p.pdv_id
-     AND s.batch_id = ?
     WHERE p.id_dms = ?
       AND p.activo = 1
-    ORDER BY
-      CASE s.estado_epin
-        WHEN 'ACTIVO' THEN 1
-        WHEN 'BLOQUEADO' THEN 2
-        WHEN 'INACTIVO' THEN 3
-        ELSE 4
-      END,
-      s.epin ASC
     LIMIT 1
   `;
 
-  const [rows] = await pool.query(sql, [latestBatch.batch_id, String(idDms).trim()]);
-  return rows[0] || null;
+  const [pdvRows] = await pool.query(pdvSql, [String(idDms).trim()]);
+  const pdv = pdvRows[0];
+
+  if (!pdv) return null;
+
+  const epins = await findEpinsByPdvId(pool, pdv.pdv_id);
+
+  return buildPdvWithEpins(pdv, epins);
 }
 
 async function findBasicByPdvId(pdvId) {
   const pool = getPool();
-  const latestBatch = await getLatestDoneBatch(pool);
 
-  if (!latestBatch) return null;
-
-  const sql = `
+  const pdvSql = `
     SELECT
       p.pdv_id,
       p.id_dms,
       p.nombre_pdv,
       p.categoria,
+      p.estado_pdv,
       p.propietario,
       p.circuito,
       p.distribuidor,
@@ -78,29 +96,21 @@ async function findBasicByPdvId(pdvId) {
       p.direccion,
       p.lat,
       p.lon,
-      p.mi_tienda,
-      s.epin_id,
-      s.epin,
-      s.estado_epin
+      p.mi_tienda
     FROM pdv p
-    LEFT JOIN epin_snapshot s
-      ON s.pdv_id = p.pdv_id
-     AND s.batch_id = ?
     WHERE p.pdv_id = ?
       AND p.activo = 1
-    ORDER BY
-      CASE s.estado_epin
-        WHEN 'ACTIVO' THEN 1
-        WHEN 'BLOQUEADO' THEN 2
-        WHEN 'INACTIVO' THEN 3
-        ELSE 4
-      END,
-      s.epin ASC
     LIMIT 1
   `;
 
-  const [rows] = await pool.query(sql, [latestBatch.batch_id, pdvId]);
-  return rows[0] || null;
+  const [pdvRows] = await pool.query(pdvSql, [pdvId]);
+  const pdv = pdvRows[0];
+
+  if (!pdv) return null;
+
+  const epins = await findEpinsByPdvId(pool, pdv.pdv_id);
+
+  return buildPdvWithEpins(pdv, epins);
 }
 
 module.exports = {

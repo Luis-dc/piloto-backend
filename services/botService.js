@@ -134,7 +134,10 @@ function formatFicha(record, opts = {}) {
   if (banner) lines.push(banner);
   lines.push("**Información asociada:**");
   lines.push(`**EPIN:** ${record?.epin || "N/D"}`);
-  lines.push(`**Estado EPIN:** ${record?.estado_epin || "N/D"}`);
+  lines.push(`**Estado EPIN:** ${record?.estado_epin || "N/D"}`); 
+  if (record?.otros_epin) {
+    lines.push(`**Otros EPIN asociados:** ${record.otros_epin}`);
+  }
   lines.push(`**ID DMS:** ${record?.id_dms || "N/D"}`);
   lines.push(`**Circuito:** ${record?.circuito || "N/D"}`);
   lines.push(`**Nombre PDV:** ${record?.nombre_pdv || "N/D"}`);
@@ -145,6 +148,8 @@ function formatFicha(record, opts = {}) {
   lines.push(`**Categoria:** ${record?.categoria || "N/D"}`);
   lines.push(`**Distribuidor:** ${record?.distribuidor || "N/D"}`);
   lines.push(`**Tiene MI TIENDA:** ${formatMiTienda(record?.mi_tienda)}`);
+  lines.push(`**Latitud:** ${record?.lat || "N/D"}`);
+  lines.push(`**Longitud:** ${record?.lon || "N/D"}`);
 
   return {
     text: lines.join("\n"),
