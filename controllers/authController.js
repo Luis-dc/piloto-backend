@@ -51,7 +51,7 @@ async function login(req, res) {
         region: user.region
       },
       process.env.JWT_SECRET,
-      { expiresIn: "8h" }
+      { expiresIn: "6h" }
     );
 
     return res.json({
