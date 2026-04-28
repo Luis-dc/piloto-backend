@@ -24,10 +24,13 @@ async function findEpinsByPdvId(pool, pdvId) {
     SELECT
       e.epin_id,
       e.epin,
-      e.estado_epin
+      e.estado_epin,
+      e.es_epin_actual,
+      e.origen_ultimo_corte
     FROM epin e
     WHERE e.pdv_id = ?
       AND e.activo = 1
+      AND e.es_epin_actual = 1
     ORDER BY
       CASE e.estado_epin
         WHEN 'ACTIVO' THEN 1

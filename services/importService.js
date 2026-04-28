@@ -541,25 +541,55 @@ async function runUpsertsAndSnapshots(batchId) {
 
   // 2) UPSERT EPIN
   const upsertEpinSql = `
-    INSERT INTO epin (epin, pdv_id, estado_epin, activo, last_seen_batch_id)
+    INSERT INTO epin (
+      epin,
+      pdv_id,
+      estado_epin,
+      es_epin_actual,
+      origen_ultimo_corte,
+      activo,
+      last_seen_batch_id,
+      last_seen_bdo_batch_id,
+      last_seen_2cnv_batch_id
+    )
     SELECT
       src.epin,
       src.pdv_id,
       src.estado_epin,
-      1,
-      src.batch_id
+      src.es_epin_actual,
+      src.origen_ultimo_corte,
+      src.activo,
+      src.last_seen_batch_id,
+      src.last_seen_bdo_batch_id,
+      src.last_seen_2cnv_batch_id
     FROM (
-      -- A) EPINs normalizados desde BDO
+      -- A) Números que vienen desde BDO normalizado
       SELECT
         b.batch_id,
         b.epin,
         p.pdv_id,
         CASE
-          WHEN c.estado IN ('Active','ACTIVO') THEN 'ACTIVO'
-          WHEN c.estado IN ('Suspended','SUSPENDED','BLOQUEADO','Blocked') THEN 'BLOQUEADO'
-          WHEN c.estado IN ('Inactive','INACTIVO') THEN 'INACTIVO'
-          ELSE 'ACTIVO'
-        END AS estado_epin
+          WHEN c.epin IS NULL THEN 'BAJA'
+          ELSE c.estado_epin
+        END AS estado_epin,
+        CASE
+          WHEN c.epin IS NOT NULL THEN 1
+          ELSE 0
+        END AS es_epin_actual,
+        CASE
+          WHEN c.epin IS NOT NULL THEN 'AMBOS'
+          ELSE 'BDO'
+        END AS origen_ultimo_corte,
+        CASE
+          WHEN c.epin IS NOT NULL THEN 1
+          ELSE 0
+        END AS activo,
+        b.batch_id AS last_seen_batch_id,
+        b.batch_id AS last_seen_bdo_batch_id,
+        CASE
+          WHEN c.epin IS NOT NULL THEN b.batch_id
+          ELSE NULL
+        END AS last_seen_2cnv_batch_id
       FROM (
         SELECT
           batch_id,
@@ -569,18 +599,26 @@ async function runUpsertsAndSnapshots(batchId) {
         WHERE batch_id = ?
         GROUP BY batch_id, epin
       ) b
-      JOIN pdv p ON p.id_dms = b.id_dms
+      JOIN pdv p
+        ON p.id_dms = b.id_dms
       LEFT JOIN (
         SELECT
           batch_id,
           epin,
-          MAX(estado) AS estado
+          CASE
+            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
+            ELSE 'ACTIVO'
+          END AS estado_epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
           AND epin <> ''
         GROUP BY batch_id, epin
-      ) c ON c.batch_id = b.batch_id AND c.epin = b.epin
+      ) c
+        ON c.batch_id = b.batch_id
+       AND c.epin = b.epin
 
       UNION
 
@@ -589,17 +627,23 @@ async function runUpsertsAndSnapshots(batchId) {
         c.batch_id,
         c.epin,
         NULL AS pdv_id,
-        CASE
-          WHEN c.estado IN ('Active','ACTIVO') THEN 'ACTIVO'
-          WHEN c.estado IN ('Suspended','SUSPENDED','BLOQUEADO','Blocked') THEN 'BLOQUEADO'
-          WHEN c.estado IN ('Inactive','INACTIVO') THEN 'INACTIVO'
-          ELSE 'ACTIVO'
-        END AS estado_epin
+        c.estado_epin,
+        1 AS es_epin_actual,
+        '2CNV' AS origen_ultimo_corte,
+        1 AS activo,
+        c.batch_id AS last_seen_batch_id,
+        NULL AS last_seen_bdo_batch_id,
+        c.batch_id AS last_seen_2cnv_batch_id
       FROM (
         SELECT
           batch_id,
           epin,
-          MAX(estado) AS estado
+          CASE
+            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
+            ELSE 'ACTIVO'
+          END AS estado_epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -610,14 +654,19 @@ async function runUpsertsAndSnapshots(batchId) {
         SELECT DISTINCT epin
         FROM stg_bdo_epin
         WHERE batch_id = ?
-      ) b ON b.epin = c.epin
+      ) b
+        ON b.epin = c.epin
       WHERE b.epin IS NULL
     ) src
     ON DUPLICATE KEY UPDATE
       pdv_id = COALESCE(VALUES(pdv_id), epin.pdv_id),
       estado_epin = VALUES(estado_epin),
-      activo = 1,
-      last_seen_batch_id = VALUES(last_seen_batch_id)
+      es_epin_actual = VALUES(es_epin_actual),
+      origen_ultimo_corte = VALUES(origen_ultimo_corte),
+      activo = VALUES(activo),
+      last_seen_batch_id = VALUES(last_seen_batch_id),
+      last_seen_bdo_batch_id = COALESCE(VALUES(last_seen_bdo_batch_id), epin.last_seen_bdo_batch_id),
+      last_seen_2cnv_batch_id = COALESCE(VALUES(last_seen_2cnv_batch_id), epin.last_seen_2cnv_batch_id)
   `;
   const [epinRes] = await pool.query(upsertEpinSql, [
     batchId,
@@ -631,8 +680,18 @@ async function runUpsertsAndSnapshots(batchId) {
 
   const insertSnapshotSql = `
     INSERT INTO epin_snapshot (
-      batch_id, id_dms, epin, pdv_id, epin_id,
-      estado_pdv, estado_epin, saldo_epin, features_json
+      batch_id,
+      id_dms,
+      epin,
+      pdv_id,
+      epin_id,
+      estado_pdv,
+      estado_epin,
+      existe_en_bdo,
+      existe_en_2cnv,
+      clasificacion_corte,
+      saldo_epin,
+      features_json
     )
     SELECT
       src.batch_id,
@@ -641,23 +700,44 @@ async function runUpsertsAndSnapshots(batchId) {
       src.pdv_id,
       e.epin_id,
       src.estado_pdv,
-      e.estado_epin,
+      src.estado_epin,
+      src.existe_en_bdo,
+      src.existe_en_2cnv,
+      src.clasificacion_corte,
       src.saldo_epin,
       src.features_json
     FROM (
-      -- A) EPINs desde BDO normalizado
+      -- A) Números desde BDO normalizado
       SELECT
         b.batch_id,
         b.id_dms,
         b.epin,
         p.pdv_id,
         b.estado_pdv,
+        CASE
+          WHEN c.epin IS NULL THEN 'BAJA'
+          ELSE c.estado_epin
+        END AS estado_epin,
+        1 AS existe_en_bdo,
+        CASE
+          WHEN c.epin IS NOT NULL THEN 1
+          ELSE 0
+        END AS existe_en_2cnv,
+        CASE
+          WHEN c.epin IS NOT NULL THEN 'BDO_2CNV'
+          ELSE 'SOLO_BDO'
+        END AS clasificacion_corte,
         c.saldo AS saldo_epin,
         JSON_OBJECT(
           'distribuidora', c.distribuidora,
           'tipo', c.tipo,
           'tiene_id_dms', true,
-          'origen', 'BDO_SPLIT'
+          'origen', 'BDO_SPLIT',
+          'clasificacion_corte',
+            CASE
+              WHEN c.epin IS NOT NULL THEN 'BDO_2CNV'
+              ELSE 'SOLO_BDO'
+            END
         ) AS features_json
       FROM (
         SELECT
@@ -669,20 +749,29 @@ async function runUpsertsAndSnapshots(batchId) {
         WHERE batch_id = ?
         GROUP BY batch_id, epin
       ) b
-      JOIN pdv p ON p.id_dms = b.id_dms
+      JOIN pdv p
+        ON p.id_dms = b.id_dms
       LEFT JOIN (
         SELECT
           batch_id,
           epin,
           MAX(saldo) AS saldo,
           MAX(distribuidora) AS distribuidora,
-          MAX(tipo) AS tipo
+          MAX(tipo) AS tipo,
+          CASE
+            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
+            ELSE 'ACTIVO'
+          END AS estado_epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
           AND epin <> ''
         GROUP BY batch_id, epin
-      ) c ON c.batch_id = b.batch_id AND c.epin = b.epin
+      ) c
+        ON c.batch_id = b.batch_id
+      AND c.epin = b.epin
 
       UNION
 
@@ -693,12 +782,17 @@ async function runUpsertsAndSnapshots(batchId) {
         c.epin,
         NULL AS pdv_id,
         NULL AS estado_pdv,
+        c.estado_epin,
+        0 AS existe_en_bdo,
+        1 AS existe_en_2cnv,
+        'SOLO_2CNV' AS clasificacion_corte,
         c.saldo AS saldo_epin,
         JSON_OBJECT(
           'distribuidora', c.distribuidora,
           'tipo', c.tipo,
           'tiene_id_dms', false,
-          'origen', '2CNV_ONLY'
+          'origen', '2CNV_ONLY',
+          'clasificacion_corte', 'SOLO_2CNV'
         ) AS features_json
       FROM (
         SELECT
@@ -706,7 +800,13 @@ async function runUpsertsAndSnapshots(batchId) {
           epin,
           MAX(saldo) AS saldo,
           MAX(distribuidora) AS distribuidora,
-          MAX(tipo) AS tipo
+          MAX(tipo) AS tipo,
+          CASE
+            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
+            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
+            ELSE 'ACTIVO'
+          END AS estado_epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -717,15 +817,20 @@ async function runUpsertsAndSnapshots(batchId) {
         SELECT DISTINCT epin
         FROM stg_bdo_epin
         WHERE batch_id = ?
-      ) b ON b.epin = c.epin
+      ) b
+        ON b.epin = c.epin
       WHERE b.epin IS NULL
     ) src
-    JOIN epin e ON e.epin = src.epin
+    JOIN epin e
+      ON e.epin = src.epin
     ON DUPLICATE KEY UPDATE
       id_dms = VALUES(id_dms),
       pdv_id = VALUES(pdv_id),
       estado_pdv = VALUES(estado_pdv),
       estado_epin = VALUES(estado_epin),
+      existe_en_bdo = VALUES(existe_en_bdo),
+      existe_en_2cnv = VALUES(existe_en_2cnv),
+      clasificacion_corte = VALUES(clasificacion_corte),
       saldo_epin = VALUES(saldo_epin),
       features_json = VALUES(features_json)
   `;

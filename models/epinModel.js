@@ -9,6 +9,7 @@ async function findOtrosEpinsByPdvId(pool, pdvId, epinPrincipal) {
     FROM epin e
     WHERE e.pdv_id = ?
       AND e.activo = 1
+      AND e.es_epin_actual = 1
       AND e.epin <> ?
     ORDER BY
       CASE e.estado_epin
@@ -39,6 +40,8 @@ async function findByEpin(epin) {
       e.epin,
       e.pdv_id,
       e.estado_epin,
+      e.es_epin_actual,
+      e.origen_ultimo_corte,
       e.last_seen_batch_id AS batch_id,
 
       p.id_dms,
@@ -59,6 +62,7 @@ async function findByEpin(epin) {
       ON p.pdv_id = e.pdv_id
     WHERE e.epin = ?
       AND e.activo = 1
+      AND e.es_epin_actual = 1
     LIMIT 1
   `;
 
@@ -88,6 +92,8 @@ async function findBasicByEpinId(epinId) {
       e.epin,
       e.pdv_id,
       e.estado_epin,
+      e.es_epin_actual,
+      e.origen_ultimo_corte,
       e.last_seen_batch_id AS batch_id,
 
       p.id_dms,
@@ -108,6 +114,7 @@ async function findBasicByEpinId(epinId) {
       ON p.pdv_id = e.pdv_id
     WHERE e.epin_id = ?
       AND e.activo = 1
+      AND e.es_epin_actual = 1
     LIMIT 1
   `;
 
