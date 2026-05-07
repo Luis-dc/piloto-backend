@@ -1,4 +1,3 @@
-// db/pool.js
 const mysql = require("mysql2/promise");
 
 let pool = null;
@@ -12,8 +11,8 @@ function getPool() {
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
       waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
+      connectionLimit: 15,
+      queueLimit: 100,
       enableKeepAlive: true,
       keepAliveInitialDelay: 0,
       localInfile: true

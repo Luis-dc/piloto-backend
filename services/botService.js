@@ -3,6 +3,9 @@ const epinModel = require("../models/epinModel");
 const chatInteractionModel = require("../models/chatInteractionModel");
 const conversationStateModel = require("../models/conversationStateModel");
 const interesadoModel = require("../models/interesadoModel");
+const tipoCasoModel = require("../models/tipoCasoModel");
+const casoPuntualModel = require("../models/casoPuntualModel");
+
 
 const STATES = {
   MENU: "MENU",
@@ -16,7 +19,14 @@ const STATES = {
   INT_WAIT_DEPARTAMENTO: "INT_WAIT_DEPARTAMENTO",
   INT_WAIT_MUNICIPIO: "INT_WAIT_MUNICIPIO",
   INT_WAIT_LAT: "INT_WAIT_LAT",
-  INT_WAIT_LON: "INT_WAIT_LON"
+  INT_WAIT_LON: "INT_WAIT_LON",
+  INT_WAIT_CONTACTO_REFERENCIA: "INT_WAIT_CONTACTO_REFERENCIA",
+
+  CASO_WAIT_ID_DMS: "CASO_WAIT_ID_DMS",
+  CASO_WAIT_TIPO: "CASO_WAIT_TIPO",
+  CASO_WAIT_DESCRIPCION: "CASO_WAIT_DESCRIPCION",
+  CASO_WAIT_CONTACTO: "CASO_WAIT_CONTACTO",
+  CASO_WAIT_TELEFONO: "CASO_WAIT_TELEFONO"
 };
 
 function toText(value) {
@@ -70,8 +80,9 @@ function menuResponse() {
       "¿Qué desea realizar?\n" +
       "1. Consultar EPIN\n" +
       "2. Consultar por ID DMS\n" +
-      "3. Interesado",
-    suggested: ["1", "2", "3", "menu"],
+      "3. Interesado\n" +
+      "4. Casos Puntuales",
+    suggested: ["1", "2", "3", "4", "menu"],
     actions: []
   };
 }
@@ -153,7 +164,7 @@ function formatFicha(record, opts = {}) {
 
   return {
     text: lines.join("\n"),
-    suggested: ["1", "2", "3", "menu"],
+    suggested: ["1", "2", "3", "4", "menu"],
     actions
   };
 }
@@ -180,6 +191,79 @@ function responseAskInteresadoId() {
     suggested: ["menu"],
     actions: []
   };
+}
+
+function responseAskCasoPuntualId() {
+  return {
+    text: "Ingrese el ID DMS del punto de venta para registrar el caso puntual.",
+    suggested: ["menu"],
+    actions: []
+  };
+}
+
+function buildTiposCasoSuggested(tipos) {
+  return tipos.map((_, index) => String(index + 1)).concat("menu");
+}
+
+function compactTiposCasoForState(tipos) {
+  return tipos.map((tipo) => ({
+    tipo_caso_id: tipo.tipo_caso_id,
+    codigo: tipo.codigo,
+    nombre: tipo.nombre,
+    descripcion_obligatoria: tipo.descripcion_obligatoria,
+    area_responsable_texto: tipo.area_responsable_texto || "N/D",
+    areas_responsables_json: tipo.areas_responsables_json || []
+  }));
+}
+
+function formatTiposCasoMenu(pdv, tipos) {
+  const lines = [];
+
+  lines.push("PDV encontrado.");
+  lines.push(`ID DMS: ${pdv.id_dms || "N/D"}`);
+  lines.push(`Nombre PDV: ${pdv.nombre_pdv || "N/D"}`);
+  lines.push("");
+  lines.push("Seleccione el tipo de caso:");
+
+  tipos.forEach((tipo, index) => {
+    lines.push(`${index + 1}. ${tipo.nombre}`);
+  });
+
+  return {
+    text: lines.join("\n"),
+    suggested: buildTiposCasoSuggested(tipos),
+    actions: []
+  };
+}
+
+function getTipoCasoByOption(tipos, value) {
+  const option = Number(toText(value));
+
+  if (!Number.isInteger(option)) return null;
+  if (option < 1 || option > tipos.length) return null;
+
+  return tipos[option - 1];
+}
+
+function normalizeDescripcionCaso(value) {
+  const text = toText(value);
+  const normalized = normalizeInput(text);
+
+  if (
+    !text ||
+    normalized === "omitir" ||
+    normalized === "omitido" ||
+    normalized === "sin descripcion" ||
+    normalized === "n/a" ||
+    normalized === "na" ||
+    normalized === "no" ||
+    normalized === "ninguna" ||
+    normalized === "ninguno"
+  ) {
+    return null;
+  }
+
+  return text;
 }
 
 async function processMessage(event) {
@@ -217,28 +301,41 @@ async function processMessage(event) {
       stateData = {};
     }
     // Comandos globales
-    else if (["menu", "inicio", "start", "reset"].includes(normalizedText)) {
-      action = normalizedText === "reset" ? "RESET" : "MENU";
-      response = menuResponse();
-      stateAfter = STATES.MENU;
-      stateData = {};
-    } else if (["1", "consultar epin", "epin"].includes(normalizedText)) {
+    else if (
+      stateBefore === STATES.MENU &&
+      ["1", "consultar epin", "epin"].includes(normalizedText)
+    ) {
       action = "CONSULTAR_EPIN";
       result = "IN_PROGRESS";
       response = responseAskEpin();
       stateAfter = STATES.WAIT_EPIN;
       stateData = {};
-    } else if (["2", "consultar por id", "consultar id", "id", "id dms"].includes(normalizedText)) {
+    } else if (
+      stateBefore === STATES.MENU &&
+      ["2", "consultar por id", "consultar id", "id", "id dms"].includes(normalizedText)
+    ) {
       action = "CONSULTAR_ID_DMS";
       result = "IN_PROGRESS";
       response = responseAskId();
       stateAfter = STATES.WAIT_ID_DMS;
       stateData = {};
-    } else if (["3", "interesado"].includes(normalizedText)) {
+    } else if (
+      stateBefore === STATES.MENU &&
+      ["3", "interesado"].includes(normalizedText)
+    ) {
       action = "INTERESADO";
       result = "IN_PROGRESS";
       response = responseAskInteresadoId();
       stateAfter = STATES.INT_WAIT_ID_DMS;
+      stateData = {};
+    } else if (
+      stateBefore === STATES.MENU &&
+      ["4", "caso puntual", "casos puntuales", "caso", "casos"].includes(normalizedText)
+    ) {
+      action = "CASO_PUNTUAL";
+      result = "IN_PROGRESS";
+      response = responseAskCasoPuntualId();
+      stateAfter = STATES.CASO_WAIT_ID_DMS;
       stateData = {};
     } else {
       switch (stateBefore) {
@@ -348,12 +445,12 @@ async function processMessage(event) {
               "PDV encontrado.\n" +
               `ID DMS: ${pdv.id_dms || "N/D"}\n` +
               `Nombre PDV: ${pdv.nombre_pdv || "N/D"}\n` +
-              "Ingrese un número de teléfono de referencia.",
+              "Ingrese el nombre de referencia.",
             suggested: ["menu"],
             actions: []
           };
         
-          stateAfter = STATES.INT_WAIT_TELEFONO;
+          stateAfter = STATES.INT_WAIT_CONTACTO_REFERENCIA;
         
           stateData = {
             pdv_id: pdv.pdv_id,
@@ -375,6 +472,51 @@ async function processMessage(event) {
             estado_pdv: pdv.estado_pdv,
             mi_tienda: pdv.mi_tienda,
             otros_epin: pdv.otros_epin || null
+          };
+        
+          break;
+        }
+
+        case STATES.INT_WAIT_CONTACTO_REFERENCIA: {
+          action = "INTERESADO";
+        
+          const contactoReferencia = rawText.trim().replace(/\s+/g, " ");
+        
+          if (!contactoReferencia || contactoReferencia.length < 3) {
+            result = "INVALID";
+            response = {
+              text: "Ingrese un nombre de referencia válido.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.INT_WAIT_CONTACTO_REFERENCIA;
+            break;
+          }
+        
+          if (contactoReferencia.length > 150) {
+            result = "INVALID";
+            response = {
+              text: "El nombre de referencia no debe superar los 150 caracteres. Intente nuevamente.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.INT_WAIT_CONTACTO_REFERENCIA;
+            break;
+          }
+        
+          result = "IN_PROGRESS";
+        
+          response = {
+            text: "Ingrese el número de teléfono de referencia.",
+            suggested: ["menu"],
+            actions: []
+          };
+        
+          stateAfter = STATES.INT_WAIT_TELEFONO;
+        
+          stateData = {
+            ...(stateData || {}),
+            contacto_referencia: contactoReferencia
           };
         
           break;
@@ -413,6 +555,7 @@ async function processMessage(event) {
         
             id_dms: finalData.id_dms,
             epin_reportado: finalData.epin || null,
+            contacto_referencia: finalData.contacto_referencia || null,
             telefono: finalData.telefono,
         
             nombre_pdv: finalData.nombre_pdv,
@@ -447,13 +590,14 @@ async function processMessage(event) {
               `EPIN: ${finalData.epin || "N/D"}\n` +
               `Nombre PDV: ${finalData.nombre_pdv || "N/D"}\n` +
               `Propietario: ${finalData.propietario || "N/D"}\n` +
-              `Teléfono: ${finalData.telefono || "N/D"}\n` +
               `Dirección: ${finalData.direccion || "N/D"}\n` +
               `Departamento: ${finalData.departamento || "N/D"}\n` +
               `Municipio: ${finalData.municipio || "N/D"}\n` +
               `Latitud: ${finalData.lat || "N/D"}\n` +
-              `Longitud: ${finalData.lon || "N/D"}`,
-            suggested: ["1", "2", "3", "menu"],
+              `Longitud: ${finalData.lon || "N/D"}\n` +
+              `Contacto de Referencia: ${finalData.contacto_referencia || "N/D"}\n` +
+              `Teléfono: ${finalData.telefono || "N/D"}\n`,
+            suggested: ["1", "2", "3", "4", "menu"],
             actions: []
           };
         
@@ -463,6 +607,292 @@ async function processMessage(event) {
           stateAfter = STATES.MENU;
           stateData = {};
         
+          break;
+        }
+
+        case STATES.CASO_WAIT_ID_DMS: {
+          action = "CASO_PUNTUAL";
+
+          if (!isDigits(rawText)) {
+            result = "INVALID";
+            response = {
+              text: "El ID DMS debe contener solo números. Intente nuevamente.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_ID_DMS;
+            break;
+          }
+
+          const pdv = await pdvModel.findByIdDms(rawText);
+
+          if (!pdv) {
+            result = "NOT_FOUND";
+            response = {
+              text: "No existe ID. Ingrese un ID DMS válido.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_ID_DMS;
+            break;
+          }
+
+          const tiposCaso = await tipoCasoModel.findActiveWithAreas();
+
+          if (!tiposCaso.length) {
+            result = "ERROR";
+            response = {
+              text: "No hay tipos de caso activos configurados. Escriba menu para continuar.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.MENU;
+            stateData = {};
+            break;
+          }
+
+          pdvId = pdv.pdv_id || null;
+          epinId = pdv.epin_id || null;
+          result = "IN_PROGRESS";
+
+          response = formatTiposCasoMenu(pdv, tiposCaso);
+
+          stateAfter = STATES.CASO_WAIT_TIPO;
+          stateData = {
+            pdv_id: pdv.pdv_id,
+            epin_id: pdv.epin_id,
+            id_dms: pdv.id_dms,
+            epin: pdv.epin,
+            estado_epin: pdv.estado_epin,
+
+            nombre_pdv: pdv.nombre_pdv,
+            propietario: pdv.propietario,
+            direccion: pdv.direccion,
+            departamento: pdv.departamento,
+            municipio: pdv.municipio,
+            lat: pdv.lat,
+            lon: pdv.lon,
+
+            categoria: pdv.categoria,
+            circuito: pdv.circuito,
+            distribuidor: pdv.distribuidor,
+            estado_pdv: pdv.estado_pdv,
+            mi_tienda: pdv.mi_tienda,
+            otros_epin: pdv.otros_epin || null,
+
+            tipos_caso: compactTiposCasoForState(tiposCaso)
+          };
+
+          break;
+        }
+
+        case STATES.CASO_WAIT_TIPO: {
+          action = "CASO_PUNTUAL";
+
+          const tiposCaso = Array.isArray(stateData.tipos_caso)
+            ? stateData.tipos_caso
+            : [];
+
+          const tipoSeleccionado = getTipoCasoByOption(tiposCaso, rawText);
+
+          if (!tipoSeleccionado) {
+            result = "INVALID";
+            response = {
+              text:
+                "Seleccione un tipo de caso válido.\n" +
+                tiposCaso.map((tipo, index) => `${index + 1}. ${tipo.nombre}`).join("\n"),
+              suggested: buildTiposCasoSuggested(tiposCaso),
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_TIPO;
+            break;
+          }
+
+          result = "IN_PROGRESS";
+
+          response = {
+            text:
+              `Tipo de caso: ${tipoSeleccionado.nombre}\n` +
+              `Area responsable: ${tipoSeleccionado.area_responsable_texto || "N/D"}\n\n` +
+              "Ingrese una descripcion del caso.\n" +
+              "Puede escribir \"omitir\" si no desea agregar descripcion.",
+            suggested: ["omitir", "menu"],
+            actions: []
+          };
+
+          stateAfter = STATES.CASO_WAIT_DESCRIPCION;
+          stateData = {
+            ...stateData,
+            tipo_caso_id: tipoSeleccionado.tipo_caso_id,
+            tipo_caso_codigo: tipoSeleccionado.codigo,
+            tipo_caso_nombre: tipoSeleccionado.nombre,
+            tipo_caso_descripcion_obligatoria: tipoSeleccionado.descripcion_obligatoria,
+            area_responsable_texto: tipoSeleccionado.area_responsable_texto || "N/D",
+            areas_responsables_json: tipoSeleccionado.areas_responsables_json || []
+          };
+
+          break;
+        }
+
+        case STATES.CASO_WAIT_DESCRIPCION: {
+          action = "CASO_PUNTUAL";
+
+          const descripcion = normalizeDescripcionCaso(rawText);
+
+          if (Number(stateData.tipo_caso_descripcion_obligatoria) === 1 && !descripcion) {
+            result = "INVALID";
+            response = {
+              text: "La descripcion es obligatoria para este tipo de caso.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_DESCRIPCION;
+            break;
+          }
+
+          result = "IN_PROGRESS";
+          response = {
+            text: "Ingrese el contacto de referencia.",
+            suggested: ["menu"],
+            actions: []
+          };
+
+          stateAfter = STATES.CASO_WAIT_CONTACTO;
+          stateData = {
+            ...stateData,
+            descripcion
+          };
+
+          break;
+        }
+
+        case STATES.CASO_WAIT_CONTACTO: {
+          action = "CASO_PUNTUAL";
+
+          if (!rawText) {
+            result = "INVALID";
+            response = {
+              text: "El contacto de referencia es obligatorio.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_CONTACTO;
+            break;
+          }
+
+          result = "IN_PROGRESS";
+          response = {
+            text: "Ingrese el telefono de referencia.",
+            suggested: ["menu"],
+            actions: []
+          };
+
+          stateAfter = STATES.CASO_WAIT_TELEFONO;
+          stateData = {
+            ...stateData,
+            contacto_referencia: rawText
+          };
+
+          break;
+        }
+
+        case STATES.CASO_WAIT_TELEFONO: {
+          action = "CASO_PUNTUAL";
+
+          if (!isPhone(rawText)) {
+            result = "INVALID";
+            response = {
+              text: "El numero de telefono no es valido. Ingrese solo numeros.",
+              suggested: ["menu"],
+              actions: []
+            };
+            stateAfter = STATES.CASO_WAIT_TELEFONO;
+            break;
+          }
+
+          const finalData = {
+            ...stateData,
+            telefono_referencia: rawText
+          };
+
+          const createResult = await casoPuntualModel.createCasoPuntual({
+            channel,
+            created_by_user_channel_id: userId,
+            created_by_name: userName,
+            created_by_web_user_id: event.webUserId || null,
+
+            pdv_id: finalData.pdv_id,
+            epin_id: finalData.epin_id,
+
+            id_dms: finalData.id_dms,
+            epin_reportado: finalData.epin || null,
+            otros_epin: finalData.otros_epin || null,
+
+            nombre_pdv: finalData.nombre_pdv,
+            propietario: finalData.propietario,
+            direccion: finalData.direccion,
+            departamento: finalData.departamento,
+            municipio: finalData.municipio,
+            circuito: finalData.circuito,
+            distribuidor: finalData.distribuidor,
+            categoria: finalData.categoria,
+
+            estado_pdv: finalData.estado_pdv,
+            estado_epin: finalData.estado_epin,
+            mi_tienda: finalData.mi_tienda,
+
+            lat: finalData.lat,
+            lon: finalData.lon,
+
+            tipo_caso_id: finalData.tipo_caso_id,
+            tipo_caso_codigo: finalData.tipo_caso_codigo,
+            tipo_caso_nombre: finalData.tipo_caso_nombre,
+
+            area_responsable_texto: finalData.area_responsable_texto,
+            areas_responsables_json: finalData.areas_responsables_json || [],
+
+            descripcion: finalData.descripcion,
+            contacto_referencia: finalData.contacto_referencia,
+            telefono_referencia: finalData.telefono_referencia,
+
+            data_json: {
+              conversationId,
+              payload,
+              createdByRole: event.userRole || null,
+              createdByRegion: event.userRegion || null,
+              source: "BOT_OPCION_4_CASO_PUNTUAL"
+            }
+          });
+
+          result = "SUCCESS";
+
+          response = {
+            text:
+              "Solicitud registrada.\n" +
+              `Solicitud ID: ${createResult.casoPuntualId}\n` +
+              "Tipo solicitud: Caso puntual\n" +
+              `ID DMS: ${finalData.id_dms || "N/D"}\n` +
+              `EPIN: ${finalData.epin || "N/D"}\n` +
+              `Nombre PDV: ${finalData.nombre_pdv || "N/D"}\n` +
+              `Propietario: ${finalData.propietario || "N/D"}\n` +
+              `Telefono referencia: ${finalData.telefono_referencia || "N/D"}\n` +
+              `Contacto referencia: ${finalData.contacto_referencia || "N/D"}\n` +
+              `Direccion: ${finalData.direccion || "N/D"}\n` +
+              `Departamento: ${finalData.departamento || "N/D"}\n` +
+              `Municipio: ${finalData.municipio || "N/D"}\n` +
+              `Tipo de caso: ${finalData.tipo_caso_nombre || "N/D"}\n` +
+              `Area responsable: ${finalData.area_responsable_texto || "N/D"}\n` +
+              `Descripcion: ${finalData.descripcion || "N/D"}`,
+            suggested: ["1", "2", "3", "4", "menu"],
+            actions: []
+          };
+
+          pdvId = finalData.pdv_id || null;
+          epinId = finalData.epin_id || null;
+
+          stateAfter = STATES.MENU;
+          stateData = {};
+
           break;
         }
 
@@ -701,7 +1131,7 @@ async function processMessage(event) {
               `Municipio: ${finalData.municipio || "N/D"}\n` +
               `Latitud: ${finalData.lat}\n` +
               `Longitud: ${finalData.lon}`,
-            suggested: ["1", "2", "3", "menu"],
+            suggested: ["1", "2", "3", "4", "menu"],
             actions: []
           };
 

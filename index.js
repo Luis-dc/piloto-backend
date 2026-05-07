@@ -9,8 +9,10 @@ const authRoutes = require("./routes/authRoutes");
 const importRoutes = require("./routes/importRoutes");
 const botRoutes = require("./routes/botRoutes");
 const interesadoRoutes = require("./routes/interesadoRoutes");
+const casoPuntualRoutes = require("./routes/casoPuntualRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const userRoutes = require("./routes/userRoutes");
+
 
 const app = express();
 
@@ -52,6 +54,7 @@ app.use(authRoutes);
 app.use(importRoutes)
 app.use(botRoutes);
 app.use(interesadoRoutes);
+app.use(casoPuntualRoutes);
 app.use(analyticsRoutes);
 app.use(userRoutes);
 
