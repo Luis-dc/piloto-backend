@@ -1,5 +1,6 @@
 const {
   resolveAsOfDateFromOptionalFiles,
+  validateIncomingImportFiles,
   createOrGetBatch,
   runImportPipeline,
   getBatchStatus,
@@ -18,6 +19,11 @@ async function uploadImport(req, res) {
   }
 
   try {
+    await validateIncomingImportFiles({
+      bdoPath: bdo?.path || null,
+      cnvPath: cnv?.path || null
+    });
+  
     const asOfDate = resolveAsOfDateFromOptionalFiles({
       bdoOriginalName: bdo?.originalname || null,
       cnvOriginalName: cnv?.originalname || null

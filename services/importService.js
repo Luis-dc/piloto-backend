@@ -205,6 +205,91 @@ function map2CnvHeader(header) {
   };
   return map[h] || null;
 }
+async function readCsvHeader(filePath) {
+  return new Promise((resolve, reject) => {
+    let headerRow = null;
+
+    const parser = parse({
+      bom: true,
+      relax_quotes: true,
+      relax_column_count: true,
+      trim: true,
+      skip_empty_lines: true,
+      to_line: 1
+    });
+
+    fs.createReadStream(filePath)
+      .pipe(parser)
+      .on("data", (row) => {
+        if (!headerRow) {
+          headerRow = row.map((h) => normalizeHeader(h));
+        }
+      })
+      .on("end", () => {
+        if (!headerRow || !headerRow.length) {
+          return reject(new Error("El archivo CSV está vacío o no tiene encabezados."));
+        }
+
+        resolve(headerRow);
+      })
+      .on("error", reject);
+  });
+}
+
+function assertRequiredHeaders({ fileLabel, headerRow, requiredHeaders }) {
+  const headerSet = new Set(headerRow);
+
+  const missing = requiredHeaders.filter((h) => !headerSet.has(h));
+
+  if (missing.length) {
+    throw new Error(
+      `El archivo cargado en ${fileLabel} no corresponde a un archivo ${fileLabel} válido. Faltan columnas: ${missing.join(", ")}`
+    );
+  }
+}
+
+async function validateIncomingImportFiles({ bdoPath, cnvPath }) {
+  if (bdoPath) {
+    const bdoHeaders = await readCsvHeader(bdoPath);
+
+    assertRequiredHeaders({
+      fileLabel: "BDO",
+      headerRow: bdoHeaders,
+      requiredHeaders: [
+        "ID",
+        "DEPARTAMENTO",
+        "MUNICIPIO",
+        "CIRCUITO",
+        "EPIN",
+        "ES_EPIN",
+        "ESTADO",
+        "NOMBRE",
+        "DIRECCION",
+        "CATEGORIA",
+        "X",
+        "Y",
+        "PROPIETARIO",
+        "DISTRIBUIDOR"
+      ]
+    });
+  }
+
+  if (cnvPath) {
+    const cnvHeaders = await readCsvHeader(cnvPath);
+
+    assertRequiredHeaders({
+      fileLabel: "2CNV",
+      headerRow: cnvHeaders,
+      requiredHeaders: [
+        "DISTRIBUIDORA",
+        "ESTADO",
+        "EPIN",
+        "TIPO",
+        "SALDO"
+      ]
+    });
+  }
+}
 
 function toNumOrNull(v) {
   const s = String(v ?? "").trim();
@@ -1328,6 +1413,7 @@ async function listImportBatches(limit = 20) {
 module.exports = {
   resolveAsOfDateFromOptionalFiles,
   validateAndGetFechaCorte,
+  validateIncomingImportFiles,
   createOrGetBatch,
   runImportPipeline,
   getBatchStatus,
