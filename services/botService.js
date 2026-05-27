@@ -5,7 +5,7 @@ const conversationStateModel = require("../models/conversationStateModel");
 const interesadoModel = require("../models/interesadoModel");
 const tipoCasoModel = require("../models/tipoCasoModel");
 const casoPuntualModel = require("../models/casoPuntualModel");
-
+const casoPuntualNotificationService = require("./casoPuntualNotificationService");
 
 const STATES = {
   MENU: "MENU",
@@ -752,7 +752,7 @@ async function processMessage(event) {
 
           result = "IN_PROGRESS";
           response = {
-            text: "Ingrese el contacto de referencia.",
+            text: "Ingrese el nombre de contacto.",
             suggested: ["menu"],
             actions: []
           };
@@ -863,6 +863,20 @@ async function processMessage(event) {
               source: "BOT_OPCION_4_CASO_PUNTUAL"
             }
           });
+
+          try {
+            await casoPuntualNotificationService.notifyCasoPuntualCreated({
+              casoPuntualId: createResult.casoPuntualId,
+              caso: finalData,
+              createdByName: userName,
+              createdByRegion: event.userRegion || null
+            });
+          } catch (emailError) {
+            console.error("[CASO_PUNTUAL_EMAIL_ERROR]", {
+              casoPuntualId: createResult.casoPuntualId,
+              message: emailError.message
+            });
+          }
 
           result = "SUCCESS";
 

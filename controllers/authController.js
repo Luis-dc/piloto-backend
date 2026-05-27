@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { getPool } = require("../db/pool");
+const passwordResetService = require("../services/passwordResetService");
 
 async function login(req, res) {
   try {
@@ -70,4 +71,48 @@ async function login(req, res) {
   }
 }
 
-module.exports = { login };
+async function forgotPassword(req, res) {
+  try {
+    const result = await passwordResetService.requestPasswordReset({
+      email: req.body.email,
+      ip: req.ip,
+      userAgent: req.get("user-agent")
+    });
+
+    return res.json({
+      ok: true,
+      message: result.message
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+}
+
+async function resetPassword(req, res) {
+  try {
+    const result = await passwordResetService.resetPassword({
+      token: req.body.token,
+      newPassword: req.body.newPassword,
+      confirmPassword: req.body.confirmPassword
+    });
+
+    return res.json({
+      ok: true,
+      message: result.message
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+}
+
+module.exports = {
+  login,
+  forgotPassword,
+  resetPassword
+};
