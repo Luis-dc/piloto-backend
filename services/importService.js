@@ -333,7 +333,11 @@ async function normalizeBdoEpins(batchId) {
       AND id_dms <> ''
       AND epin_raw IS NOT NULL
       AND epin_raw <> ''
-      AND (UPPER(TRIM(es_epin)) = 'SI' OR TRIM(es_epin) = '1')
+      AND (
+        UPPER(TRIM(es_epin)) IN ('SI', 'S', '1', 'TRUE')
+        OR es_epin IS NULL
+        OR TRIM(es_epin) = ''
+      )
     `,
     [batchId]
   );
