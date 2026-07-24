@@ -24,15 +24,26 @@ async function findEpinsByPdvId(pool, pdvId) {
     SELECT
       e.epin_id,
       e.epin,
-      e.estado_epin,
+      s.estado_epin,
       e.es_epin_actual,
       e.origen_ultimo_corte
-    FROM epin e
-    WHERE e.pdv_id = ?
+    FROM epin_snapshot s
+    CROSS JOIN (
+      SELECT batch_id
+      FROM import_batch
+      WHERE status = 'done'
+      ORDER BY as_of_date DESC, batch_id DESC
+      LIMIT 1
+    ) latest_batch
+    JOIN epin e
+      ON e.epin = s.epin
+    WHERE s.batch_id = latest_batch.batch_id
+      AND s.pdv_id = ?
+      AND s.existe_en_2cnv = 1
       AND e.activo = 1
       AND e.es_epin_actual = 1
     ORDER BY
-      CASE e.estado_epin
+      CASE s.estado_epin
         WHEN 'ACTIVO' THEN 1
         WHEN 'BLOQUEADO' THEN 2
         WHEN 'INACTIVO' THEN 3

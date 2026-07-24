@@ -7,12 +7,23 @@ async function findOtrosEpinsByPdvId(pool, pdvId, epinPrincipal) {
     SELECT
       e.epin
     FROM epin e
-    WHERE e.pdv_id = ?
+    CROSS JOIN (
+      SELECT batch_id
+      FROM import_batch
+      WHERE status = 'done'
+      ORDER BY as_of_date DESC, batch_id DESC
+      LIMIT 1
+    ) latest_batch
+    JOIN epin_snapshot s
+      ON s.batch_id = latest_batch.batch_id
+     AND s.epin = e.epin
+     AND s.existe_en_2cnv = 1
+    WHERE s.pdv_id = ?
       AND e.activo = 1
       AND e.es_epin_actual = 1
       AND e.epin <> ?
     ORDER BY
-      CASE e.estado_epin
+      CASE s.estado_epin
         WHEN 'ACTIVO' THEN 1
         WHEN 'BLOQUEADO' THEN 2
         WHEN 'INACTIVO' THEN 3
@@ -38,11 +49,11 @@ async function findByEpin(epin) {
     SELECT
       e.epin_id,
       e.epin,
-      e.pdv_id,
-      e.estado_epin,
+      s.pdv_id,
+      s.estado_epin,
       e.es_epin_actual,
       e.origen_ultimo_corte,
-      e.last_seen_batch_id AS batch_id,
+      s.batch_id,
 
       p.id_dms,
       p.nombre_pdv,
@@ -58,8 +69,19 @@ async function findByEpin(epin) {
       p.estado_pdv,
       p.mi_tienda
     FROM epin e
+    CROSS JOIN (
+      SELECT batch_id
+      FROM import_batch
+      WHERE status = 'done'
+      ORDER BY as_of_date DESC, batch_id DESC
+      LIMIT 1
+    ) latest_batch
+    JOIN epin_snapshot s
+      ON s.batch_id = latest_batch.batch_id
+     AND s.epin = e.epin
+     AND s.existe_en_2cnv = 1
     LEFT JOIN pdv p
-      ON p.pdv_id = e.pdv_id
+      ON p.pdv_id = s.pdv_id
     WHERE e.epin = ?
       AND e.activo = 1
       AND e.es_epin_actual = 1
@@ -90,11 +112,11 @@ async function findBasicByEpinId(epinId) {
     SELECT
       e.epin_id,
       e.epin,
-      e.pdv_id,
-      e.estado_epin,
+      s.pdv_id,
+      s.estado_epin,
       e.es_epin_actual,
       e.origen_ultimo_corte,
-      e.last_seen_batch_id AS batch_id,
+      s.batch_id,
 
       p.id_dms,
       p.nombre_pdv,
@@ -110,8 +132,19 @@ async function findBasicByEpinId(epinId) {
       p.estado_pdv,
       p.mi_tienda
     FROM epin e
+    CROSS JOIN (
+      SELECT batch_id
+      FROM import_batch
+      WHERE status = 'done'
+      ORDER BY as_of_date DESC, batch_id DESC
+      LIMIT 1
+    ) latest_batch
+    JOIN epin_snapshot s
+      ON s.batch_id = latest_batch.batch_id
+     AND s.epin = e.epin
+     AND s.existe_en_2cnv = 1
     LEFT JOIN pdv p
-      ON p.pdv_id = e.pdv_id
+      ON p.pdv_id = s.pdv_id
     WHERE e.epin_id = ?
       AND e.activo = 1
       AND e.es_epin_actual = 1

@@ -544,6 +544,27 @@ const parser = parse({
 async function runUpsertsAndSnapshots(batchId) {
   const pool = getPool();
 
+  // El 2CNV es la fuente de verdad para decidir qué números siguen siendo EPIN.
+  // Si el corte está vacío, abortamos antes de modificar maestros para evitar
+  // una inactivación masiva causada por un archivo vacío o inválido.
+  const [[cnvValidRow]] = await pool.query(
+    `
+    SELECT COUNT(DISTINCT epin) AS cnt
+    FROM stg_2cnv
+    WHERE batch_id = ?
+      AND epin IS NOT NULL
+      AND epin <> ''
+    `,
+    [batchId]
+  );
+  const cnvValidEpins = Number(cnvValidRow.cnt || 0);
+
+  if (cnvValidEpins === 0) {
+    throw new Error(
+      "El corte 2CNV no contiene EPIN válidos; se canceló la actualización para evitar una inactivación masiva"
+    );
+  }
+
   const [[pdvDistinctRow]] = await pool.query(
     "SELECT COUNT(DISTINCT id_dms) AS cnt FROM stg_bdo WHERE batch_id=?",
     [batchId]
@@ -764,7 +785,49 @@ async function runUpsertsAndSnapshots(batchId) {
     batchId
   ]);
 
-  // 3) SNAPSHOT
+  // 3) INACTIVAR EPINs QUE YA NO EXISTEN EN EL 2CNV DEL CORTE ACTUAL
+  // Conservamos los last_seen_* para saber en qué batch aparecieron por última vez.
+  const deactivateStaleEpinSql = `
+    UPDATE epin e
+    LEFT JOIN (
+      SELECT DISTINCT epin
+      FROM stg_2cnv
+      WHERE batch_id = ?
+        AND epin IS NOT NULL
+        AND epin <> ''
+    ) current_2cnv
+      ON current_2cnv.epin = e.epin
+    LEFT JOIN (
+      SELECT DISTINCT epin
+      FROM stg_bdo_epin
+      WHERE batch_id = ?
+    ) current_bdo
+      ON current_bdo.epin = e.epin
+    SET
+      e.estado_epin = 'BAJA',
+      e.es_epin_actual = 0,
+      e.activo = 0,
+      e.origen_ultimo_corte = CASE
+        WHEN current_bdo.epin IS NOT NULL THEN 'BDO'
+        ELSE 'DESCONOCIDO'
+      END
+    WHERE current_2cnv.epin IS NULL
+      AND (
+        e.estado_epin <> 'BAJA'
+        OR e.es_epin_actual <> 0
+        OR e.activo <> 0
+        OR e.origen_ultimo_corte <> CASE
+          WHEN current_bdo.epin IS NOT NULL THEN 'BDO'
+          ELSE 'DESCONOCIDO'
+        END
+      )
+  `;
+  const [staleEpinRes] = await pool.query(deactivateStaleEpinSql, [
+    batchId,
+    batchId
+  ]);
+
+  // 4) SNAPSHOT
   await pool.query("DELETE FROM epin_snapshot WHERE batch_id=?", [batchId]);
 
   const insertSnapshotSql = `
@@ -943,7 +1006,8 @@ async function runUpsertsAndSnapshots(batchId) {
       existedBefore: epinExisting,
       insertedApprox: Math.max(0, epinDistinct - epinExisting),
       updatedApprox: Math.max(0, epinExisting),
-      affectedRows: epinRes.affectedRows
+      affectedRows: epinRes.affectedRows,
+      inactivatedRows: staleEpinRes.affectedRows
     },
     snapshot: {
       insertedRows: snapRes.affectedRows
@@ -1237,6 +1301,7 @@ async function runImportPipeline({
     await updateImportBatch(batchId, {
       status: "done",
       total_rows: (bdoCnt.cnt || 0) + (cnvCnt.cnt || 0),
+      inactivated_rows: upserts.epin.inactivatedRows || 0,
       error_rows: 0
     });
 
