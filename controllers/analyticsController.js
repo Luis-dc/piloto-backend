@@ -1,8 +1,39 @@
-const analyticsService = require("../services/analyticsService");
+const analyticsService = require(
+  "../services/analyticsService"
+);
+
+const epinAnalyticsService = require(
+  "../services/epinAnalyticsService"
+);
+
+
+// =========================================
+// ANÁLISIS EPIN
+// =========================================
+
+async function getEpinCuts(req, res, next) {
+  try {
+    const items =
+      await epinAnalyticsService.getAvailableEpinCuts();
+
+    return res.json({
+      ok: true,
+      items
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 
 async function getEpinSummary(req, res, next) {
   try {
-    const data = await analyticsService.getEpinSummary();
+    const batchId = req.query.batchId;
+
+    const data =
+      await epinAnalyticsService.getEpinAnalysisSummary(
+        batchId
+      );
 
     return res.json({
       ok: true,
@@ -13,9 +44,18 @@ async function getEpinSummary(req, res, next) {
   }
 }
 
-async function getEpinRecency(req, res, next) {
+
+async function getEpinEvents(req, res, next) {
   try {
-    const data = await analyticsService.getEpinRecencyDistribution();
+    const batchId = req.query.batchId;
+    const eventType = req.query.type;
+
+    const data =
+      await epinAnalyticsService.getEpinEventPreview(
+        batchId,
+        eventType,
+        20
+      );
 
     return res.json({
       ok: true,
@@ -26,74 +66,73 @@ async function getEpinRecency(req, res, next) {
   }
 }
 
-async function getEpinSegments(req, res, next) {
-    try {
-      const groupBy = req.query.groupBy || "departamento";
-      const data = await analyticsService.getEpinSegments(groupBy);
-  
-      return res.json({
-        ok: true,
-        ...data
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
 
-  async function downloadEpinSegments(req, res, next) {
-    try {
-      const groupBy = req.query.groupBy || "departamento";
-      const result = await analyticsService.exportBlockedInactivePdvsExcel(groupBy);
-  
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+async function downloadEpinEvents(
+  req,
+  res,
+  next
+) {
+  try {
+    const batchId = req.query.batchId;
+    const eventType = req.query.type;
+
+    const result =
+      await epinAnalyticsService.exportEpinEventsExcel(
+        batchId,
+        eventType
       );
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${result.fileName}"`
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.fileName}"`
+    );
+
+    return res.send(
+      Buffer.from(result.content)
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+
+// =========================================
+// TENDENCIAS EPIN
+// =========================================
+
+async function getEpinTrends(
+  req,
+  res,
+  next
+) {
+  try {
+    const period =
+      req.query.period || "12";
+
+    const data =
+      await analyticsService.getEpinTrendSeries(
+        period
       );
-  
-      return res.send(Buffer.from(result.content));
-    } catch (error) {
-      next(error);
-    }
-  }
 
-/*Tendencias*/
-
-async function getEpinTrends(req, res, next) {
-    try {
-      const limit = Number(req.query.limit || 12);
-      const data = await analyticsService.getEpinTrendSeries(limit);
-  
-      return res.json({
-        ok: true,
-        ...data
-      });
-    } catch (error) {
-      next(error);
-    }
+    return res.json({
+      ok: true,
+      ...data
+    });
+  } catch (error) {
+    next(error);
   }
-  
-  async function getEpinTrendComparison(req, res, next) {
-    try {
-      const data = await analyticsService.getEpinTrendComparison();
-  
-      return res.json({
-        ok: true,
-        ...data
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+}
 
-  module.exports = {
+
+module.exports = {
+  getEpinCuts,
   getEpinSummary,
-  getEpinRecency,
-  getEpinSegments,
-  downloadEpinSegments,
-  getEpinTrends,
-  getEpinTrendComparison
+  getEpinEvents,
+  downloadEpinEvents,
+  getEpinTrends
 };

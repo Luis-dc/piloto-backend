@@ -1,55 +1,85 @@
 const express = require("express");
+
 const {
+  getEpinCuts,
   getEpinSummary,
-  getEpinRecency,
-  getEpinSegments,
-  downloadEpinSegments,
-  getEpinTrends,
-  getEpinTrendComparison
-} = require("../controllers/analyticsController");
-const { verifyToken, authorizeRoles } = require("../middlewares/authMiddleware");
+  getEpinEvents,
+  downloadEpinEvents,
+  getEpinTrends
+} = require(
+  "../controllers/analyticsController"
+);
+
+const {
+  verifyToken,
+  authorizeRoles
+} = require(
+  "../middlewares/authMiddleware"
+);
 
 const router = express.Router();
+
+
+// =========================================
+// ANÁLISIS EPIN
+// =========================================
+
+router.get(
+  "/api/analytics/epin/cuts",
+  verifyToken,
+  authorizeRoles(
+    "SUPERVISOR",
+    "ADMIN"
+  ),
+  getEpinCuts
+);
+
 
 router.get(
   "/api/analytics/epin/summary",
   verifyToken,
-  authorizeRoles("SUPERVISOR", "ADMIN"),
+  authorizeRoles(
+    "SUPERVISOR",
+    "ADMIN"
+  ),
   getEpinSummary
 );
 
+
 router.get(
-  "/api/analytics/epin/recency",
+  "/api/analytics/epin/events",
   verifyToken,
-  authorizeRoles("SUPERVISOR", "ADMIN"),
-  getEpinRecency
+  authorizeRoles(
+    "SUPERVISOR",
+    "ADMIN"
+  ),
+  getEpinEvents
 );
 
-router.get(
-    "/api/analytics/epin/segments",
-    verifyToken,
-    authorizeRoles("SUPERVISOR", "ADMIN"),
-    getEpinSegments
-  );
-  
-router.get(
-    "/api/analytics/epin/segments/export",
-    verifyToken,
-    authorizeRoles("SUPERVISOR", "ADMIN"),
-    downloadEpinSegments
-);
 
 router.get(
-    "/api/analytics/epin/trends",
-    verifyToken,
-    authorizeRoles("SUPERVISOR", "ADMIN"),
-    getEpinTrends
-  );
-  
+  "/api/analytics/epin/events/export",
+  verifyToken,
+  authorizeRoles(
+    "SUPERVISOR",
+    "ADMIN"
+  ),
+  downloadEpinEvents
+);
+
+
+// =========================================
+// TENDENCIAS
+// =========================================
+
 router.get(
-    "/api/analytics/epin/trends/comparison",
-    verifyToken,
-    authorizeRoles("SUPERVISOR", "ADMIN"),
-    getEpinTrendComparison
-  );
+  "/api/analytics/epin/trends",
+  verifyToken,
+  authorizeRoles(
+    "SUPERVISOR",
+    "ADMIN"
+  ),
+  getEpinTrends
+);
+
 module.exports = router;

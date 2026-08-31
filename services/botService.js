@@ -294,17 +294,25 @@ async function processMessage(event) {
     stateData = currentState?.data_json || {};
 
     // Si no mandan texto, devuelve menú
-    if (!rawText) {
-      action = "MENU";
-      response = menuResponse();
-      stateAfter = STATES.MENU;
-      stateData = {};
-    }
-    // Comandos globales
-    else if (
-      stateBefore === STATES.MENU &&
-      ["1", "consultar epin", "epin"].includes(normalizedText)
-    ) {
+      if (!rawText) {
+        action = "MENU";
+        response = menuResponse();
+        stateAfter = STATES.MENU;
+        stateData = {};
+      }
+      // Comando global: volver al menú desde cualquier estado
+      else if (normalizedText === "menu") {
+        action = "MENU";
+        result = "SUCCESS";
+        response = menuResponse();
+        stateAfter = STATES.MENU;
+        stateData = {};
+      }
+      // Opciones del menú principal
+      else if (
+        stateBefore === STATES.MENU &&
+        ["1", "consultar epin", "epin"].includes(normalizedText)
+      ) {
       action = "CONSULTAR_EPIN";
       result = "IN_PROGRESS";
       response = responseAskEpin();

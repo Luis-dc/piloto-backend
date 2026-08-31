@@ -1,8 +1,8 @@
-// services/importService.js
 const fs = require("fs");
 const { parse } = require("csv-parse");
 const { getPool } = require("../db/pool");
 const logger = require("../utils/logger");
+const { reprocessEpinHistoryFromBatch } = require("./epinHistoryReprocessService");
 const path = require("path");
 
 // ---------- helpers ----------
@@ -281,10 +281,7 @@ async function validateIncomingImportFiles({ bdoPath, cnvPath }) {
       fileLabel: "2CNV",
       headerRow: cnvHeaders,
       requiredHeaders: [
-        "DISTRIBUIDORA",
-        "ESTADO",
         "EPIN",
-        "TIPO",
         "SALDO"
       ]
     });
@@ -680,7 +677,7 @@ async function runUpsertsAndSnapshots(batchId) {
         p.pdv_id,
         CASE
           WHEN c.epin IS NULL THEN 'BAJA'
-          ELSE c.estado_epin
+          ELSE 'ACTIVO'
         END AS estado_epin,
         CASE
           WHEN c.epin IS NOT NULL THEN 1
@@ -714,13 +711,7 @@ async function runUpsertsAndSnapshots(batchId) {
       LEFT JOIN (
         SELECT
           batch_id,
-          epin,
-          CASE
-            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
-            ELSE 'ACTIVO'
-          END AS estado_epin
+          epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -737,7 +728,7 @@ async function runUpsertsAndSnapshots(batchId) {
         c.batch_id,
         c.epin,
         NULL AS pdv_id,
-        c.estado_epin,
+        'ACTIVO' As estado_epin,
         1 AS es_epin_actual,
         '2CNV' AS origen_ultimo_corte,
         1 AS activo,
@@ -747,13 +738,7 @@ async function runUpsertsAndSnapshots(batchId) {
       FROM (
         SELECT
           batch_id,
-          epin,
-          CASE
-            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
-            ELSE 'ACTIVO'
-          END AS estado_epin
+          epin
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -868,7 +853,7 @@ async function runUpsertsAndSnapshots(batchId) {
         b.estado_pdv,
         CASE
           WHEN c.epin IS NULL THEN 'BAJA'
-          ELSE c.estado_epin
+          ELSE 'ACTIVO'
         END AS estado_epin,
         1 AS existe_en_bdo,
         CASE
@@ -881,8 +866,6 @@ async function runUpsertsAndSnapshots(batchId) {
         END AS clasificacion_corte,
         c.saldo AS saldo_epin,
         JSON_OBJECT(
-          'distribuidora', c.distribuidora,
-          'tipo', c.tipo,
           'tiene_id_dms', true,
           'origen', 'BDO_SPLIT',
           'clasificacion_corte',
@@ -907,15 +890,7 @@ async function runUpsertsAndSnapshots(batchId) {
         SELECT
           batch_id,
           epin,
-          MAX(saldo) AS saldo,
-          MAX(distribuidora) AS distribuidora,
-          MAX(tipo) AS tipo,
-          CASE
-            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
-            ELSE 'ACTIVO'
-          END AS estado_epin
+          MAX(saldo) AS saldo
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -934,14 +909,12 @@ async function runUpsertsAndSnapshots(batchId) {
         c.epin,
         NULL AS pdv_id,
         NULL AS estado_pdv,
-        c.estado_epin,
+        'ACTIVO' AS estado_epin,
         0 AS existe_en_bdo,
         1 AS existe_en_2cnv,
         'SOLO_2CNV' AS clasificacion_corte,
         c.saldo AS saldo_epin,
         JSON_OBJECT(
-          'distribuidora', c.distribuidora,
-          'tipo', c.tipo,
           'tiene_id_dms', false,
           'origen', '2CNV_ONLY',
           'clasificacion_corte', 'SOLO_2CNV'
@@ -950,15 +923,7 @@ async function runUpsertsAndSnapshots(batchId) {
         SELECT
           batch_id,
           epin,
-          MAX(saldo) AS saldo,
-          MAX(distribuidora) AS distribuidora,
-          MAX(tipo) AS tipo,
-          CASE
-            WHEN SUM(UPPER(TRIM(estado)) IN ('SUSPENDED','BLOQUEADO','BLOCKED')) > 0 THEN 'BLOQUEADO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('INACTIVE','INACTIVO')) > 0 THEN 'INACTIVO'
-            WHEN SUM(UPPER(TRIM(estado)) IN ('ACTIVE','ACTIVO')) > 0 THEN 'ACTIVO'
-            ELSE 'ACTIVO'
-          END AS estado_epin
+          MAX(saldo) AS saldo
         FROM stg_2cnv
         WHERE batch_id = ?
           AND epin IS NOT NULL
@@ -1096,10 +1061,10 @@ async function cloneCnvToBatch(fromBatchId, toBatchId) {
   await pool.query(
     `
     INSERT INTO stg_2cnv (
-      batch_id, distribuidora, estado, epin, tipo, saldo
+      batch_id, epin, saldo
     )
     SELECT
-      ?, distribuidora, estado, epin, tipo, saldo
+      ?, epin, saldo
     FROM stg_2cnv
     WHERE batch_id = ?
     `,
@@ -1181,6 +1146,26 @@ async function runImportPipeline({
       hasNewCnv
     });
 
+    const sourceMetadataPatch = {};
+
+    // BDO
+    if (bdoSource.mode === "upload") {
+      sourceMetadataPatch.bdo_source_type = "UPLOAD";
+      sourceMetadataPatch.bdo_source_batch_id = batchId;
+    } else if (bdoSource.mode === "reuse-clone") {
+      sourceMetadataPatch.bdo_source_type = "REUSED";
+      sourceMetadataPatch.bdo_source_batch_id = bdoSource.fromBatchId;
+    }
+
+    // 2CNV
+    if (cnvSource.mode === "upload") {
+      sourceMetadataPatch.cnv_source_type = "UPLOAD";
+      sourceMetadataPatch.cnv_source_batch_id = batchId;
+    } else if (cnvSource.mode === "reuse-clone") {
+      sourceMetadataPatch.cnv_source_type = "REUSED";
+      sourceMetadataPatch.cnv_source_batch_id = cnvSource.fromBatchId;
+    }
+
     await updateImportBatch(batchId, {
       status: "processing",
       error_message: null,
@@ -1194,7 +1179,9 @@ async function runImportPipeline({
           ? `cnv=${cnvOriginalName}`
           : `cnv=REUSED_FROM_BATCH_${cnvSource.fromBatchId}`
       ].join(";"),
-      uploaded_by: userLabel || "unknown"
+      uploaded_by: userLabel || "unknown",
+    
+      ...sourceMetadataPatch
     });
 
     logger.info("Import pipeline start", {
@@ -1305,6 +1292,20 @@ async function runImportPipeline({
       error_rows: 0
     });
 
+    let epinHistory = null;
+
+    if (hasNewCnv) {
+      epinHistory = await reprocessEpinHistoryFromBatch(
+        batchId
+      );
+
+      logger.info("EPIN history reprocessed", {
+        batchId,
+        startBatchId: epinHistory.startBatchId,
+        processed: epinHistory.processed
+      });
+    }
+
     const report = {
       batchId,
       asOfDate,
@@ -1324,7 +1325,11 @@ async function runImportPipeline({
           reusedFromBatchId: cnvLoad.reusedFromBatchId || null
         }
       },
+    
       upserts,
+    
+      epinHistory,
+    
       durationMs: Date.now() - start
     };
 
@@ -1411,27 +1416,27 @@ async function loadDataToStaging({ table, batchId, filePath }) {
 
   if (table === "stg_2cnv") {
     const sql = `
-      LOAD DATA LOCAL INFILE '${normalizedPath}'
-      INTO TABLE stg_2cnv
-      CHARACTER SET utf8mb4
-      FIELDS TERMINATED BY ','
-      OPTIONALLY ENCLOSED BY '"'
-      LINES TERMINATED BY '\n'
-      IGNORE 1 LINES
-      (@DISTRIBUIDORA, @ESTADO, @EPIN, @TIPO, @SALDO)
-      SET
-        batch_id = ${Number(batchId)},
-        distribuidora = NULLIF(TRIM(@DISTRIBUIDORA), ''),
-        estado = NULLIF(TRIM(@ESTADO), ''),
-        epin = CASE
-          WHEN TRIM(@EPIN) REGEXP '^[0-9]{1,32}$' THEN TRIM(@EPIN)
-          ELSE NULL
-        END,
-        tipo = NULLIF(TRIM(@TIPO), ''),
-        saldo = CASE
-          WHEN NULLIF(TRIM(@SALDO), '') IS NULL THEN NULL
-          ELSE CAST(TRIM(@SALDO) AS DECIMAL(12,2))
-        END
+    LOAD DATA LOCAL INFILE '${normalizedPath}'
+    INTO TABLE stg_2cnv
+    CHARACTER SET utf8mb4
+    FIELDS TERMINATED BY ','
+    OPTIONALLY ENCLOSED BY '"'
+    LINES TERMINATED BY '\n'
+    IGNORE 1 LINES
+    (@EPIN, @SALDO)
+    SET
+      batch_id = ${Number(batchId)},
+      distribuidora = NULL,
+      estado = NULL,
+      epin = CASE
+        WHEN TRIM(@EPIN) REGEXP '^[0-9]{1,32}$' THEN TRIM(@EPIN)
+        ELSE NULL
+      END,
+      tipo = NULL,
+      saldo = CASE
+        WHEN NULLIF(TRIM(@SALDO), '') IS NULL THEN NULL
+        ELSE CAST(TRIM(@SALDO) AS DECIMAL(12,2))
+      END
     `;
 
     const [result] = await pool.query({

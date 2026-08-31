@@ -12,6 +12,7 @@ const interesadoRoutes = require("./routes/interesadoRoutes");
 const casoPuntualRoutes = require("./routes/casoPuntualRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const userRoutes = require("./routes/userRoutes");
+const { startPreparationCleanup } = require("./services/importPreparationCleanupService");
 
 
 const app = express();
@@ -64,6 +65,7 @@ app.use(errorMiddleware);
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
+  startPreparationCleanup();
 });
 
 
