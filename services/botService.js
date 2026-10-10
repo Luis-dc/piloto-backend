@@ -7,6 +7,21 @@ const tipoCasoModel = require("../models/tipoCasoModel");
 const casoPuntualModel = require("../models/casoPuntualModel");
 const casoPuntualNotificationService = require("./casoPuntualNotificationService");
 
+const INTERESADO_ACTIVO =
+  String(process.env.BOT_INTERESADO_ENABLED || "").trim().toLowerCase() === "true";
+const CASOS_PUNTUALES_ACTIVOS =
+  String(process.env.BOT_CASOS_PUNTUALES_ENABLED || "").trim().toLowerCase() === "true";
+
+function menuSuggested() {
+  return [
+    "1",
+    "2",
+    ...(INTERESADO_ACTIVO ? ["3"] : []),
+    ...(CASOS_PUNTUALES_ACTIVOS ? ["4"] : []),
+    "menu"
+  ];
+}
+
 const STATES = {
   MENU: "MENU",
   WAIT_EPIN: "WAIT_EPIN",
@@ -79,10 +94,10 @@ function menuResponse() {
       "Bienvenido a SmartTrack.\n" +
       "¿Qué desea realizar?\n" +
       "1. Consultar EPIN\n" +
-      "2. Consultar por ID DMS\n" +
-      "3. Interesado\n" +
-      "4. Casos Puntuales",
-    suggested: ["1", "2", "3", "4", "menu"],
+      "2. Consultar por ID DMS" +
+      (INTERESADO_ACTIVO ? "\n3. Interesado" : "") +
+      (CASOS_PUNTUALES_ACTIVOS ? "\n4. Casos Puntuales" : ""),
+    suggested: menuSuggested(),
     actions: []
   };
 }
@@ -164,7 +179,7 @@ function formatFicha(record, opts = {}) {
 
   return {
     text: lines.join("\n"),
-    suggested: ["1", "2", "3", "4", "menu"],
+    suggested: menuSuggested(),
     actions
   };
 }
@@ -293,8 +308,19 @@ async function processMessage(event) {
     stateBefore = currentState?.state || STATES.MENU;
     stateData = currentState?.data_json || {};
 
-    // Si no mandan texto, devuelve menú
-      if (!rawText) {
+    // Cancela flujos pendientes si su opcion fue desactivada.
+    const flujoDesactivado =
+      (!INTERESADO_ACTIVO && String(stateBefore).startsWith("INT_WAIT_")) ||
+      (!CASOS_PUNTUALES_ACTIVOS && String(stateBefore).startsWith("CASO_WAIT_"));
+
+    if (flujoDesactivado) {
+      action = "MENU";
+      response = menuResponse();
+      stateAfter = STATES.MENU;
+      stateData = {};
+    }
+    // Si no mandan texto, devuelve menu
+    else if (!rawText) {
         action = "MENU";
         response = menuResponse();
         stateAfter = STATES.MENU;
@@ -329,6 +355,7 @@ async function processMessage(event) {
       stateData = {};
     } else if (
       stateBefore === STATES.MENU &&
+      INTERESADO_ACTIVO &&
       ["3", "interesado"].includes(normalizedText)
     ) {
       action = "INTERESADO";
@@ -338,6 +365,7 @@ async function processMessage(event) {
       stateData = {};
     } else if (
       stateBefore === STATES.MENU &&
+      CASOS_PUNTUALES_ACTIVOS &&
       ["4", "caso puntual", "casos puntuales", "caso", "casos"].includes(normalizedText)
     ) {
       action = "CASO_PUNTUAL";
@@ -365,8 +393,10 @@ async function processMessage(event) {
           if (!epin) {
             result = "NOT_FOUND";
             response = {
-              text: "NO ES EPIN.\nPuede intentar nuevamente, volver a menu o registrar Interesado.",
-              suggested: ["3", "menu"],
+              text: INTERESADO_ACTIVO
+                ? "NO ES EPIN.\nPuede intentar nuevamente o escribir menu y seleccionar Interesado."
+                : "NO ES EPIN.\nPuede intentar nuevamente o volver a menu.",
+              suggested: ["menu"],
               actions: []
             };
             stateAfter = STATES.WAIT_EPIN;
@@ -605,7 +635,7 @@ async function processMessage(event) {
               `Longitud: ${finalData.lon || "N/D"}\n` +
               `Contacto de Referencia: ${finalData.contacto_referencia || "N/D"}\n` +
               `Teléfono: ${finalData.telefono || "N/D"}\n`,
-            suggested: ["1", "2", "3", "4", "menu"],
+            suggested: menuSuggested(),
             actions: []
           };
         
@@ -905,7 +935,7 @@ async function processMessage(event) {
               `Tipo de caso: ${finalData.tipo_caso_nombre || "N/D"}\n` +
               `Area responsable: ${finalData.area_responsable_texto || "N/D"}\n` +
               `Descripcion: ${finalData.descripcion || "N/D"}`,
-            suggested: ["1", "2", "3", "4", "menu"],
+            suggested: menuSuggested(),
             actions: []
           };
 
@@ -1153,7 +1183,7 @@ async function processMessage(event) {
               `Municipio: ${finalData.municipio || "N/D"}\n` +
               `Latitud: ${finalData.lat}\n` +
               `Longitud: ${finalData.lon}`,
-            suggested: ["1", "2", "3", "4", "menu"],
+            suggested: menuSuggested(),
             actions: []
           };
 
