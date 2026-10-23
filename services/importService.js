@@ -31,6 +31,144 @@ function parseFechaCorteFromFilename(filename) {
   return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
 }
 
+function isPredictionEnabled() {
+  return String(process.env.PREDICTION_ENABLED || "false")
+    .trim()
+    .toLowerCase() === "true";
+}
+
+async function enqueuePredictionRunIfEligible(batchId) {
+  if (!isPredictionEnabled()) {
+    return {
+      queued: false,
+      reason: "prediction_disabled"
+    };
+  }
+
+  const pool = getPool();
+
+  // 1. Validar que el corte tenga EPIN 2CNV y al menos un saldo disponible
+  const [[eligibility]] = await pool.query(
+    `
+    SELECT
+      COUNT(*) AS total_epin,
+      SUM(
+        CASE
+          WHEN saldo_epin IS NULL THEN 1
+          ELSE 0
+        END
+      ) AS sin_saldo,
+      SUM(
+        CASE
+          WHEN saldo_epin IS NOT NULL THEN 1
+          ELSE 0
+        END
+      ) AS con_saldo
+    FROM epin_snapshot
+    WHERE batch_id = ?
+      AND existe_en_2cnv = 1
+    `,
+    [batchId]
+  );
+
+  const totalEpin = Number(
+    eligibility?.total_epin || 0
+  );
+
+  const sinSaldo = Number(
+    eligibility?.sin_saldo || 0
+  );
+
+  const conSaldo = Number(
+    eligibility?.con_saldo || 0
+  );
+
+  if (totalEpin === 0) {
+    return {
+      queued: false,
+      reason: "no_epin_2cnv"
+    };
+  }
+
+  if (conSaldo === 0) {
+    return {
+      queued: false,
+      reason: "no_saldo_available",
+      totalEpin,
+      sinSaldo,
+      conSaldo
+    };
+  }
+
+  // 2. Recuperar modelo activo
+  const [models] = await pool.query(
+    `
+    SELECT model_version_id
+    FROM model_version
+    WHERE status = 'ACTIVO'
+    ORDER BY model_version_id DESC
+    LIMIT 2
+    `
+  );
+
+  if (models.length !== 1) {
+    return {
+      queued: false,
+      reason: models.length === 0
+        ? "no_active_model"
+        : "multiple_active_models"
+    };
+  }
+
+  const modelVersionId =
+    models[0].model_version_id;
+
+  // 3. Crear ejecución OFICIAL.
+  // official_batch_id UNIQUE evita duplicar un run oficial
+  // para el mismo batch.
+  try {
+    const [result] = await pool.query(
+      `
+      INSERT INTO model_run (
+        model_version_id,
+        batch_id,
+        run_type,
+        status,
+        total_epin,
+        total_predictions
+      )
+      VALUES (?, ?, 'OFICIAL', 'PENDIENTE', ?, 0)
+      `,
+      [
+        modelVersionId,
+        batchId,
+        totalEpin
+      ]
+    );
+  
+    return {
+      queued: true,
+      reason: "queued",
+      modelRunId: result.insertId,
+      totalEpin,
+      modelVersionId
+    };
+  
+  } catch (err) {
+  
+    if (err?.code === "ER_DUP_ENTRY") {
+      return {
+        queued: false,
+        reason: "official_run_already_exists",
+        totalEpin,
+        modelVersionId
+      };
+    }
+  
+    throw err;
+  }
+}
+
 function validateAndGetFechaCorte(bdoOriginalName, cnvOriginalName) {
   const bdoDate = parseFechaCorteFromFilename(bdoOriginalName);
   const cnvDate = parseFechaCorteFromFilename(cnvOriginalName);
@@ -1285,25 +1423,72 @@ async function runImportPipeline({
       [batchId]
     );
 
+    // SmartTrack terminó correctamente todo su procesamiento normal
     await updateImportBatch(batchId, {
       status: "done",
       total_rows: (bdoCnt.cnt || 0) + (cnvCnt.cnt || 0),
       inactivated_rows: upserts.epin.inactivatedRows || 0,
       error_rows: 0
     });
-
+  
+    // =====================================================
+    // REPROCESO DEL HISTORIAL EPIN
+    // =====================================================
+  
     let epinHistory = null;
-
+  
     if (hasNewCnv) {
       epinHistory = await reprocessEpinHistoryFromBatch(
         batchId
       );
-
+  
       logger.info("EPIN history reprocessed", {
         batchId,
         startBatchId: epinHistory.startBatchId,
         processed: epinHistory.processed
       });
+    }
+  
+    // =====================================================
+    // ML - ENCOLAR PREDICCION DE FORMA DESACOPLADA
+    // =====================================================
+  
+    let predictionQueue = null;
+  
+    if (hasNewCnv) {
+      try {
+        predictionQueue =
+          await enqueuePredictionRunIfEligible(
+            batchId
+          );
+  
+        logger.info(
+          "Prediction queue evaluated",
+          {
+            batchId,
+            ...predictionQueue
+          }
+        );
+      } catch (predictionError) {
+        const predictionErrorMessage = String(
+          predictionError?.message ||
+          predictionError
+        ).slice(0, 800);
+  
+        logger.error(
+          "Prediction queue failed",
+          {
+            batchId,
+            error: predictionErrorMessage
+          }
+        );
+  
+        predictionQueue = {
+          queued: false,
+          reason: "queue_error",
+          error: predictionErrorMessage
+        };
+      }
     }
 
     const report = {
@@ -1329,6 +1514,8 @@ async function runImportPipeline({
       upserts,
     
       epinHistory,
+      
+      predictionQueue,
     
       durationMs: Date.now() - start
     };
