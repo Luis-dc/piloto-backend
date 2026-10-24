@@ -12,6 +12,7 @@ const interesadoRoutes = require("./routes/interesadoRoutes");
 const casoPuntualRoutes = require("./routes/casoPuntualRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
+const modelVersionRoutes = require("./routes/modelVersionRoutes");
 const userRoutes = require("./routes/userRoutes");
 const { startPreparationCleanup } = require("./services/importPreparationCleanupService");
 
@@ -59,6 +60,7 @@ app.use(interesadoRoutes);
 app.use(casoPuntualRoutes);
 app.use(analyticsRoutes);
 app.use(predictionRoutes);
+app.use(modelVersionRoutes);
 app.use(userRoutes);
 
 // Middleware de errores
