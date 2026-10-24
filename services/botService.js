@@ -6,6 +6,7 @@ const interesadoModel = require("../models/interesadoModel");
 const tipoCasoModel = require("../models/tipoCasoModel");
 const casoPuntualModel = require("../models/casoPuntualModel");
 const casoPuntualNotificationService = require("./casoPuntualNotificationService");
+const predictionService = require("./predictionService");
 
 const INTERESADO_ACTIVO =
   String(process.env.BOT_INTERESADO_ENABLED || "").trim().toLowerCase() === "true";
@@ -153,6 +154,7 @@ function resolveEpinBanner(record, includeEpinBanner) {
 function formatFicha(record, opts = {}) {
   const includeEpinBanner = Boolean(opts.includeEpinBanner);
   const actions = buildMapActions(record);
+  const prediction = opts.prediction || null;
 
   const lines = [];
   const banner = resolveEpinBanner(record, includeEpinBanner);
@@ -160,7 +162,13 @@ function formatFicha(record, opts = {}) {
   if (banner) lines.push(banner);
   lines.push("**Información asociada:**");
   lines.push(`**EPIN:** ${record?.epin || "N/D"}`);
-  lines.push(`**Estado EPIN:** ${record?.estado_epin || "N/D"}`); 
+  lines.push(`**Estado EPIN:** ${record?.estado_epin || "N/D"}`);
+  if (prediction) {
+    lines.push("");
+    lines.push("**Predicción de riesgo:**");
+    lines.push(`**Nivel:** ${prediction.riskLevel}`);
+    lines.push(`**Probabilidad estimada:** ${prediction.riskPercentage}%`);
+  } 
   if (record?.otros_epin) {
     lines.push(`**Otros EPIN asociados:** ${record.otros_epin}`);
   }
@@ -406,7 +414,40 @@ async function processMessage(event) {
           pdvId = epin.pdv_id || null;
           epinId = epin.epin_id || null;
           result = "FOUND";
-          response = formatFicha(epin, { includeEpinBanner: true });
+
+          let prediction = null;
+
+          try {
+            const predictionEnabled =
+              String(
+                process.env.PREDICTION_ENABLED || "false"
+              )
+                .trim()
+                .toLowerCase() === "true";
+
+            if (predictionEnabled) {
+              prediction =
+                await predictionService.getLatestPredictionByEpin(
+                  epin.epin
+                );
+            }
+          } catch (predictionError) {
+            console.error(
+              "Error consultando predicción para EPIN:",
+              predictionError
+            );
+
+            prediction = null;
+          }
+
+          response = formatFicha(
+            epin,
+            {
+              includeEpinBanner: true,
+              prediction
+            }
+          );
+
           stateAfter = STATES.MENU;
           stateData = {};
           break;

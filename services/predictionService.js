@@ -670,9 +670,85 @@ async function getPredictionTop(
     };
 }
 
+async function getLatestPredictionByEpin(
+  epin
+) {
+  const pool = getPool();
+
+  if (!epin) {
+    return null;
+  }
+
+  const [rows] =
+    await pool.query(
+      `
+        SELECT
+          p.risk_score,
+          p.risk_level,
+
+          mr.model_run_id,
+          mr.batch_id,
+
+          mv.version_name
+
+        FROM prediction p
+
+        INNER JOIN model_run mr
+          ON mr.model_run_id =
+             p.model_run_id
+
+        INNER JOIN model_version mv
+          ON mv.model_version_id =
+             mr.model_version_id
+
+        WHERE p.epin = ?
+          AND mr.run_type = 'OFICIAL'
+          AND mr.status = 'COMPLETADO'
+
+        ORDER BY
+          mr.finished_at DESC,
+          mr.model_run_id DESC
+
+        LIMIT 1
+      `,
+      [String(epin)]
+    );
+
+  const row = rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    riskScore:
+      Number(row.risk_score),
+
+    riskPercentage:
+      Number(
+        (
+          Number(row.risk_score) *
+          100
+        ).toFixed(2)
+      ),
+
+    riskLevel:
+      row.risk_level,
+
+    modelRunId:
+      row.model_run_id,
+
+    batchId:
+      row.batch_id,
+
+    versionName:
+      row.version_name
+  };
+}
 
 module.exports = {
   getLatestOfficialRun,
+  getLatestPredictionByEpin,
   getPredictionSummary,
   getPredictionTop,
   exportPredictionsExcel,
