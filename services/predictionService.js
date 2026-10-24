@@ -427,9 +427,31 @@ async function getPredictionTop(
 
   async function exportPredictionsExcel(
     authUser,
+    riskLevel,
     outputStream
   ) {
     const pool = getPool();
+  
+    const risk =
+      String(riskLevel || "")
+        .trim()
+        .toUpperCase();
+  
+    const allowedRisks = [
+      "VERDE",
+      "AMARILLO",
+      "ROJO"
+    ];
+  
+    if (!allowedRisks.includes(risk)) {
+      const error =
+        new Error(
+          "Nivel de riesgo inválido. Use VERDE, AMARILLO o ROJO."
+        );
+  
+      error.status = 400;
+      throw error;
+    }
   
     const run =
       await getLatestOfficialRun();
@@ -463,18 +485,66 @@ async function getPredictionTop(
       );
   
     worksheet.columns = [
-      { header: "EPIN", key: "epin", width: 15 },
-      { header: "ID DMS", key: "idDms", width: 15 },
-      { header: "Probabilidad", key: "riskPercentage", width: 15 },
-      { header: "Nivel de riesgo", key: "riskLevel", width: 16 },
-      { header: "Estado EPIN", key: "estadoEpin", width: 16 },
-      { header: "Estado PDV", key: "estadoPdv", width: 16 },
-      { header: "PDV", key: "nombrePdv", width: 30 },
-      { header: "Departamento", key: "departamento", width: 18 },
-      { header: "Municipio", key: "municipio", width: 22 },
-      { header: "Distribuidor", key: "distribuidor", width: 24 },
-      { header: "Propietario", key: "propietario", width: 28 },
-      { header: "Dirección", key: "direccion", width: 40 }
+      {
+        header: "EPIN",
+        key: "epin",
+        width: 15
+      },
+      {
+        header: "ID DMS",
+        key: "idDms",
+        width: 15
+      },
+      {
+        header: "Probabilidad",
+        key: "riskPercentage",
+        width: 15
+      },
+      {
+        header: "Nivel de riesgo",
+        key: "riskLevel",
+        width: 16
+      },
+      {
+        header: "Estado EPIN",
+        key: "estadoEpin",
+        width: 16
+      },
+      {
+        header: "Estado PDV",
+        key: "estadoPdv",
+        width: 16
+      },
+      {
+        header: "PDV",
+        key: "nombrePdv",
+        width: 30
+      },
+      {
+        header: "Departamento",
+        key: "departamento",
+        width: 18
+      },
+      {
+        header: "Municipio",
+        key: "municipio",
+        width: 22
+      },
+      {
+        header: "Distribuidor",
+        key: "distribuidor",
+        width: 24
+      },
+      {
+        header: "Propietario",
+        key: "propietario",
+        width: 28
+      },
+      {
+        header: "Dirección",
+        key: "direccion",
+        width: 40
+      }
     ];
   
     const PAGE_SIZE = 5000;
@@ -491,7 +561,6 @@ async function getPredictionTop(
               p.risk_level,
   
               s.id_dms,
-              s.saldo_epin,
               s.estado_epin,
               s.estado_pdv,
   
@@ -513,6 +582,7 @@ async function getPredictionTop(
              AND b.id_dms = s.id_dms
   
             WHERE p.model_run_id = ?
+              AND p.risk_level = ?
               ${regionFilter.clause}
   
             ORDER BY
@@ -526,6 +596,7 @@ async function getPredictionTop(
             run.batch_id,
             run.batch_id,
             run.model_run_id,
+            risk,
             ...regionFilter.params
           ]
         );
@@ -554,13 +625,6 @@ async function getPredictionTop(
   
             riskLevel:
               row.risk_level,
-  
-            saldo:
-              row.saldo_epin !== null
-                ? Number(
-                    row.saldo_epin
-                  )
-                : null,
   
             estadoEpin:
               row.estado_epin,
@@ -602,9 +666,9 @@ async function getPredictionTop(
   
     return {
       fileName:
-        `predicciones_batch_${run.batch_id}.xlsx`
+        `predicciones_${risk.toLowerCase()}_batch_${run.batch_id}.xlsx`
     };
-  }
+}
 
 
 module.exports = {
