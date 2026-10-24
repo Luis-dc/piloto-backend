@@ -4,6 +4,7 @@ const { getPool } = require("../db/pool");
 const logger = require("../utils/logger");
 const { reprocessEpinHistoryFromBatch } = require("./epinHistoryReprocessService");
 const path = require("path");
+const { evaluatePreviousOfficialRun } = require("./predictionEvaluationService");
 
 // ---------- helpers ----------
 function parseFechaCorteFromFilename(filename) {
@@ -1448,6 +1449,48 @@ async function runImportPipeline({
         processed: epinHistory.processed
       });
     }
+
+    // =====================================================
+    // ML - EVALUAR PREDICCION OFICIAL ANTERIOR
+    // =====================================================
+
+    let predictionEvaluation = null;
+
+    if (hasNewCnv) {
+      try {
+        predictionEvaluation =
+          await evaluatePreviousOfficialRun(
+            batchId
+          );
+
+        logger.info(
+          "Prediction evaluation evaluated",
+          {
+            batchId,
+            ...predictionEvaluation
+          }
+        );
+      } catch (evaluationError) {
+        const evaluationErrorMessage = String(
+          evaluationError?.message ||
+          evaluationError
+        ).slice(0, 800);
+
+        logger.error(
+          "Prediction evaluation failed",
+          {
+            batchId,
+            error: evaluationErrorMessage
+          }
+        );
+
+        predictionEvaluation = {
+          evaluated: false,
+          reason: "evaluation_error",
+          error: evaluationErrorMessage
+        };
+      }
+    }
   
     // =====================================================
     // ML - ENCOLAR PREDICCION DE FORMA DESACOPLADA
@@ -1514,6 +1557,8 @@ async function runImportPipeline({
       upserts,
     
       epinHistory,
+
+      predictionEvaluation,
       
       predictionQueue,
     
