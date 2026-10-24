@@ -194,56 +194,102 @@ const regionFilter =
     "b.departamento"
   );
 
-const [rows] =
-  await pool.query(
-    `
-      SELECT
-        COUNT(*) AS total,
+  let rows;
 
-        SUM(
-          CASE
-            WHEN p.risk_level = 'VERDE'
-            THEN 1
-            ELSE 0
-          END
-        ) AS verde,
-
-        SUM(
-          CASE
-            WHEN p.risk_level = 'AMARILLO'
-            THEN 1
-            ELSE 0
-          END
-        ) AS amarillo,
-
-        SUM(
-          CASE
-            WHEN p.risk_level = 'ROJO'
-            THEN 1
-            ELSE 0
-          END
-        ) AS rojo
-
-      FROM prediction p
-
-      INNER JOIN epin_snapshot s
-        ON s.batch_id = ?
-       AND s.epin = p.epin
-
-      LEFT JOIN stg_bdo b
-        ON b.batch_id = ?
-       AND b.id_dms = s.id_dms
-
-      WHERE p.model_run_id = ?
-        ${regionFilter.clause}
-    `,
-    [
-      run.batch_id,
-      run.batch_id,
-      run.model_run_id,
-      ...regionFilter.params
-    ]
-  );
+  if (authUser?.role === "ADMIN") {
+    [rows] = await pool.query(
+      `
+        SELECT
+          COUNT(*) AS total,
+  
+          SUM(
+            CASE
+              WHEN risk_level = 'VERDE'
+              THEN 1
+              ELSE 0
+            END
+          ) AS verde,
+  
+          SUM(
+            CASE
+              WHEN risk_level = 'AMARILLO'
+              THEN 1
+              ELSE 0
+            END
+          ) AS amarillo,
+  
+          SUM(
+            CASE
+              WHEN risk_level = 'ROJO'
+              THEN 1
+              ELSE 0
+            END
+          ) AS rojo
+  
+        FROM prediction
+  
+        WHERE model_run_id = ?
+      `,
+      [run.model_run_id]
+    );
+  
+  } else {
+    const regionFilter =
+      buildRegionFilter(
+        authUser,
+        "b.departamento"
+      );
+  
+    [rows] = await pool.query(
+      `
+        SELECT
+          COUNT(*) AS total,
+  
+          SUM(
+            CASE
+              WHEN p.risk_level = 'VERDE'
+              THEN 1
+              ELSE 0
+            END
+          ) AS verde,
+  
+          SUM(
+            CASE
+              WHEN p.risk_level = 'AMARILLO'
+              THEN 1
+              ELSE 0
+            END
+          ) AS amarillo,
+  
+          SUM(
+            CASE
+              WHEN p.risk_level = 'ROJO'
+              THEN 1
+              ELSE 0
+            END
+          ) AS rojo
+  
+        FROM prediction p
+  
+        INNER JOIN epin_snapshot s
+          ON s.batch_id = ?
+         AND s.epin = p.epin
+  
+        LEFT JOIN stg_bdo b
+          ON b.batch_id = ?
+         AND b.id_dms = s.id_dms
+  
+        WHERE p.model_run_id = ?
+          ${regionFilter.clause}
+      `,
+      [
+        run.batch_id,
+        run.batch_id,
+        run.model_run_id,
+        ...regionFilter.params
+      ]
+    );
+  }
 
   const row =
     rows[0] || {};
