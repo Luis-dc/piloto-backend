@@ -11,34 +11,35 @@ const {
 
 const REGION_DEPARTMENTS = {
   Central: [
+    "Alta Verapaz",
+    "Baja Verapaz",
     "Guatemala",
     "Sacatepequez",
     "Chimaltenango",
-    "Escuintla"
+    "Solola",
+    "Suchitepequez",
+    "Retalhuleu",
+
   ],
 
   Oriente: [
+    "Escuintla",
     "El Progreso",
     "Jalapa",
     "Jutiapa",
     "Santa Rosa",
     "Zacapa",
     "Chiquimula",
-    "Izabal"
+    "Izabal",
+    "Peten"
   ],
 
   Occidente: [
-    "Alta Verapaz",
-    "Baja Verapaz",
     "Quiche",
     "Huehuetenango",
     "Quetzaltenango",
     "San Marcos",
-    "Totonicapan",
-    "Solola",
-    "Suchitepequez",
-    "Retalhuleu",
-    "Peten"
+    "Totonicapan"
   ]
 };
 
@@ -187,8 +188,15 @@ async function getPredictionSummary(
    * inmediatamente el universo completo.
    */
 
-  const [rows] =
-    await pool.query(`
+const regionFilter =
+  buildRegionFilter(
+    authUser,
+    "b.departamento"
+  );
+
+const [rows] =
+  await pool.query(
+    `
       SELECT
         COUNT(*) AS total,
 
@@ -218,10 +226,24 @@ async function getPredictionSummary(
 
       FROM prediction p
 
+      INNER JOIN epin_snapshot s
+        ON s.batch_id = ?
+       AND s.epin = p.epin
+
+      LEFT JOIN stg_bdo b
+        ON b.batch_id = ?
+       AND b.id_dms = s.id_dms
+
       WHERE p.model_run_id = ?
-    `, [
-      run.model_run_id
-    ]);
+        ${regionFilter.clause}
+    `,
+    [
+      run.batch_id,
+      run.batch_id,
+      run.model_run_id,
+      ...regionFilter.params
+    ]
+  );
 
   const row =
     rows[0] || {};
@@ -307,7 +329,6 @@ async function getPredictionTop(
             p.risk_level,
   
             s.id_dms,
-            s.saldo_epin,
             s.estado_epin,
             s.estado_pdv,
   
@@ -376,13 +397,6 @@ async function getPredictionTop(
           riskLevel:
             row.risk_level,
   
-          saldo:
-            row.saldo_epin !== null
-              ? Number(
-                  row.saldo_epin
-                )
-              : null,
-  
           estadoEpin:
             row.estado_epin,
   
@@ -412,7 +426,8 @@ async function getPredictionTop(
   }
 
   async function exportPredictionsExcel(
-    authUser
+    authUser,
+    outputStream
   ) {
     const pool = getPool();
   
@@ -435,53 +450,12 @@ async function getPredictionTop(
         "b.departamento"
       );
   
-    const [rows] =
-      await pool.query(
-        `
-          SELECT
-            p.epin,
-            p.risk_score,
-            p.risk_level,
-  
-            s.id_dms,
-            s.saldo_epin,
-            s.estado_epin,
-            s.estado_pdv,
-  
-            b.nombre_pdv,
-            b.departamento,
-            b.municipio,
-            b.direccion,
-            b.propietario,
-            b.distribuidor
-  
-          FROM prediction p
-  
-          INNER JOIN epin_snapshot s
-            ON s.batch_id = ?
-           AND s.epin = p.epin
-  
-          LEFT JOIN stg_bdo b
-            ON b.batch_id = ?
-           AND b.id_dms = s.id_dms
-  
-          WHERE p.model_run_id = ?
-            ${regionFilter.clause}
-  
-          ORDER BY
-            p.risk_score DESC,
-            p.prediction_id ASC
-        `,
-        [
-          run.batch_id,
-          run.batch_id,
-          run.model_run_id,
-          ...regionFilter.params
-        ]
-      );
-  
     const workbook =
-      new ExcelJS.Workbook();
+      new ExcelJS.stream.xlsx.WorkbookWriter({
+        stream: outputStream,
+        useStyles: false,
+        useSharedStrings: false
+      });
   
     const worksheet =
       workbook.addWorksheet(
@@ -489,149 +463,146 @@ async function getPredictionTop(
       );
   
     worksheet.columns = [
-      {
-        header: "EPIN",
-        key: "epin",
-        width: 15
-      },
-      {
-        header: "ID DMS",
-        key: "idDms",
-        width: 15
-      },
-      {
-        header: "Probabilidad",
-        key: "riskPercentage",
-        width: 15
-      },
-      {
-        header: "Nivel de riesgo",
-        key: "riskLevel",
-        width: 16
-      },
-      {
-        header: "Saldo",
-        key: "saldo",
-        width: 14
-      },
-      {
-        header: "Estado EPIN",
-        key: "estadoEpin",
-        width: 16
-      },
-      {
-        header: "Estado PDV",
-        key: "estadoPdv",
-        width: 16
-      },
-      {
-        header: "PDV",
-        key: "nombrePdv",
-        width: 30
-      },
-      {
-        header: "Departamento",
-        key: "departamento",
-        width: 18
-      },
-      {
-        header: "Municipio",
-        key: "municipio",
-        width: 22
-      },
-      {
-        header: "Distribuidor",
-        key: "distribuidor",
-        width: 24
-      },
-      {
-        header: "Propietario",
-        key: "propietario",
-        width: 28
-      },
-      {
-        header: "Dirección",
-        key: "direccion",
-        width: 40
-      }
+      { header: "EPIN", key: "epin", width: 15 },
+      { header: "ID DMS", key: "idDms", width: 15 },
+      { header: "Probabilidad", key: "riskPercentage", width: 15 },
+      { header: "Nivel de riesgo", key: "riskLevel", width: 16 },
+      { header: "Estado EPIN", key: "estadoEpin", width: 16 },
+      { header: "Estado PDV", key: "estadoPdv", width: 16 },
+      { header: "PDV", key: "nombrePdv", width: 30 },
+      { header: "Departamento", key: "departamento", width: 18 },
+      { header: "Municipio", key: "municipio", width: 22 },
+      { header: "Distribuidor", key: "distribuidor", width: 24 },
+      { header: "Propietario", key: "propietario", width: 28 },
+      { header: "Dirección", key: "direccion", width: 40 }
     ];
   
-    for (const row of rows) {
-      worksheet.addRow({
-        epin:
-          row.epin,
+    const PAGE_SIZE = 5000;
+    let offset = 0;
   
-        idDms:
-          row.id_dms,
+    while (true) {
+      const [rows] =
+        await pool.query(
+          `
+            SELECT
+              p.prediction_id,
+              p.epin,
+              p.risk_score,
+              p.risk_level,
   
-        riskPercentage:
-          Number(
-            (
+              s.id_dms,
+              s.saldo_epin,
+              s.estado_epin,
+              s.estado_pdv,
+  
+              b.nombre_pdv,
+              b.departamento,
+              b.municipio,
+              b.direccion,
+              b.propietario,
+              b.distribuidor
+  
+            FROM prediction p
+  
+            INNER JOIN epin_snapshot s
+              ON s.batch_id = ?
+             AND s.epin = p.epin
+  
+            LEFT JOIN stg_bdo b
+              ON b.batch_id = ?
+             AND b.id_dms = s.id_dms
+  
+            WHERE p.model_run_id = ?
+              ${regionFilter.clause}
+  
+            ORDER BY
+              p.risk_score DESC,
+              p.prediction_id ASC
+  
+            LIMIT ${PAGE_SIZE}
+            OFFSET ${offset}
+          `,
+          [
+            run.batch_id,
+            run.batch_id,
+            run.model_run_id,
+            ...regionFilter.params
+          ]
+        );
+  
+      if (!rows.length) {
+        break;
+      }
+  
+      for (const row of rows) {
+        worksheet
+          .addRow({
+            epin:
+              row.epin,
+  
+            idDms:
+              row.id_dms,
+  
+            riskPercentage:
               Number(
-                row.risk_score
-              ) * 100
-            ).toFixed(2)
-          ),
+                (
+                  Number(
+                    row.risk_score
+                  ) * 100
+                ).toFixed(2)
+              ),
   
-        riskLevel:
-          row.risk_level,
+            riskLevel:
+              row.risk_level,
   
-        saldo:
-          row.saldo_epin !== null
-            ? Number(
-                row.saldo_epin
-              )
-            : null,
+            saldo:
+              row.saldo_epin !== null
+                ? Number(
+                    row.saldo_epin
+                  )
+                : null,
   
-        estadoEpin:
-          row.estado_epin,
+            estadoEpin:
+              row.estado_epin,
   
-        estadoPdv:
-          row.estado_pdv,
+            estadoPdv:
+              row.estado_pdv,
   
-        nombrePdv:
-          row.nombre_pdv,
+            nombrePdv:
+              row.nombre_pdv,
   
-        departamento:
-          row.departamento,
+            departamento:
+              row.departamento,
   
-        municipio:
-          row.municipio,
+            municipio:
+              row.municipio,
   
-        distribuidor:
-          row.distribuidor,
+            distribuidor:
+              row.distribuidor,
   
-        propietario:
-          row.propietario,
+            propietario:
+              row.propietario,
   
-        direccion:
-          row.direccion
-      });
+            direccion:
+              row.direccion
+          })
+          .commit();
+      }
+  
+      offset += rows.length;
+  
+      if (rows.length < PAGE_SIZE) {
+        break;
+      }
     }
   
-    worksheet.getRow(1).font = {
-      bold: true
-    };
+    worksheet.commit();
   
-    worksheet.views = [
-      {
-        state: "frozen",
-        ySplit: 1
-      }
-    ];
-  
-    worksheet.autoFilter = {
-      from: "A1",
-      to: "M1"
-    };
-  
-    const content =
-      await workbook.xlsx.writeBuffer();
+    await workbook.commit();
   
     return {
       fileName:
-        `predicciones_batch_${run.batch_id}.xlsx`,
-      content
+        `predicciones_batch_${run.batch_id}.xlsx`
     };
   }
 

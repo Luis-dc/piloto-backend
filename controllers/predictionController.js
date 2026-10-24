@@ -51,16 +51,30 @@ async function getPredictionSummary(
     }
   }
 
-  async function downloadPredictions(
+async function downloadPredictions(
     req,
     res,
     next
   ) {
     try {
-      const result =
-        await predictionService.exportPredictionsExcel(
-          req.user
-        );
+      const risk =
+        String(req.query.risk || "")
+          .trim()
+          .toUpperCase();
+  
+      const allowedRisks = [
+        "VERDE",
+        "AMARILLO",
+        "ROJO"
+      ];
+  
+      if (!allowedRisks.includes(risk)) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Debe indicar risk=VERDE, AMARILLO o ROJO"
+        });
+      }
   
       res.setHeader(
         "Content-Type",
@@ -69,14 +83,25 @@ async function getPredictionSummary(
   
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${result.fileName}"`
+        `attachment; filename="predicciones_${risk.toLowerCase()}.xlsx"`
       );
   
-      return res.send(
-        Buffer.from(result.content)
+      await predictionService.exportPredictionsExcel(
+        req.user,
+        risk,
+        res
       );
     } catch (error) {
-      next(error);
+      if (!res.headersSent) {
+        return next(error);
+      }
+  
+      console.error(
+        "Error durante exportación de predicciones:",
+        error
+      );
+  
+      res.end();
     }
   }
   
